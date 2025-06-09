@@ -23,7 +23,7 @@ try {
 // Inicializa Firebase Admin con las credenciales y el bucket de Storage
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  storageBucket: 'merkagrama-crm.firebasestorage.app'
+  storageBucket: 'cantalab-crm.firebasestorage.app'
 });
 
 
@@ -31,4 +31,7 @@ admin.initializeApp({
 // Obtén la instancia de Firestore
 const db = admin.firestore();
 
+
+
 export { admin, db };
+
