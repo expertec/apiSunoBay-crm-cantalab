@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import axios from 'axios';
 
 // Dile a fluent-ffmpeg dónde está el binario
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
@@ -19,7 +20,8 @@ import { sendAudioMessage } from './whatsappService.js';  // ajusta ruta si es n
 
 dotenv.config();
 
-import { db } from './firebaseAdmin.js';
+import { db, admin } from './firebaseAdmin.js';
+
 import {
   connectToWhatsApp,
   getLatestQR,
@@ -27,8 +29,18 @@ import {
   sendMessageToLead,
   getSessionPhone
 } from './whatsappService.js';
-import { processSequences, generateGuiones, sendGuiones } from './scheduler.js';
 
+import {
+  processSequences,
+  generateGuiones,
+  sendGuiones,
+  generarLetraParaMusica,
+  generarPromptParaMusica,
+  generarMusicaConSuno,
+  procesarClips,
+  enviarMusicaPorWhatsApp,
+  retryStuckMusic
+} from './scheduler.js';
 
 
 const app = express();
@@ -56,6 +68,68 @@ app.get('/api/whatsapp/number', (req, res) => {
     res.status(503).json({ error: 'WhatsApp no conectado' });
   }
 });
+
+app.post('/api/suno/callback', express.json(), async (req, res) => {
+  const raw    = req.body;
+  const taskId = raw.taskId || raw.data?.taskId || raw.data?.task_id;
+  if (!taskId) return res.sendStatus(400);
+
+  // Extrae la URL privada que envía Suno
+  const item = Array.isArray(raw.data?.data)
+    ? raw.data.data.find(i => i.audio_url || i.source_audio_url)
+    : null;
+  const audioUrlPrivada = item?.audio_url || item?.source_audio_url;
+  if (!audioUrlPrivada) return res.sendStatus(200);
+
+  // Busca el documento correspondiente en Firestore
+  const snap = await db.collection('musica')
+    .where('taskId', '==', taskId)
+    .limit(1)
+    .get();
+  if (snap.empty) return res.sendStatus(404);
+  const docRef = snap.docs[0].ref;
+
+  try {
+    // 1) Descarga el MP3 completo a un archivo temporal
+    const tmpFull = path.join(os.tmpdir(), `${taskId}-full.mp3`);
+    const r = await axios.get(audioUrlPrivada, { responseType: 'stream' });
+    await new Promise((ok, ko) => {
+      const ws = fs.createWriteStream(tmpFull);
+      r.data.pipe(ws);
+      ws.on('finish', ok);
+      ws.on('error', ko);
+    });
+
+    // 2) Súbelo a Firebase Storage
+    const dest = `musica/full/${taskId}.mp3`;
+    await bucket.upload(tmpFull, {
+      destination: dest,
+      metadata: { contentType: 'audio/mpeg' }
+    });
+
+    // 3) Genera URL firmada pública
+    const [fullUrl] = await bucket
+      .file(dest)
+      .getSignedUrl({ action: 'read', expires: Date.now() + 86400_000 });
+
+    // 4) Actualiza el documento para que procesarClips() lo recoja
+    await docRef.update({
+      fullUrl,
+      status: 'Audio listo',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // 5) Limpia el archivo temporal
+    fs.unlink(tmpFull, () => {});
+
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ callback Suno error:', err);
+    await docRef.update({ status: 'Error música', errorMsg: err.message });
+    return res.sendStatus(500);
+  }
+});
+
 
 // Endpoint para enviar mensaje de WhatsApp
 app.post('/api/whatsapp/send-message', async (req, res) => {
@@ -176,3 +250,11 @@ cron.schedule('* * * * *', () => {
   console.log('📨 sendGuiones:', new Date().toISOString());
   sendGuiones().catch(err => console.error('Error en sendGuiones:', err));
 });
+
+// Música
+cron.schedule('*/1 * * * *', generarLetraParaMusica);
+cron.schedule('*/1 * * * *', generarPromptParaMusica);
+cron.schedule('*/2 * * * *', generarMusicaConSuno);
+cron.schedule('*/2 * * * *', procesarClips);
+cron.schedule('*/1 * * * *', enviarMusicaPorWhatsApp);
+cron.schedule('*/5 * * * *', () => retryStuckMusic(10));

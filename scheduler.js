@@ -3,6 +3,17 @@ import admin from 'firebase-admin';
 import { getWhatsAppSock } from './whatsappService.js';
 import { db } from './firebaseAdmin.js';
 import { Configuration, OpenAIApi } from 'openai';
+
+// al inicio de src/server/scheduler.js, tras tus imports existentes:
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import axios from 'axios';
+import ffmpeg from 'fluent-ffmpeg';
+
+
+const bucket = admin.storage().bucket();
+
 const { FieldValue } = admin.firestore;
 // Asegúrate de que la API key esté definida
 if (!process.env.OPENAI_API_KEY) {
@@ -30,6 +41,27 @@ function replacePlaceholders(template, leadData) {
   });
 }
 
+
+async function downloadStream(url, destPath) {
+  const res = await axios.get(url, { responseType: 'stream' });
+  await new Promise((r, e) => {
+    const ws = fs.createWriteStream(destPath);
+    res.data.pipe(ws);
+    ws.on('finish', r);
+    ws.on('error', e);
+  });
+}
+
+// helper que lanza la tarea en Suno y devuelve taskId
+async function lanzarTareaSuno({ title, stylePrompt, lyrics }) {
+  const res = await axios.post(
+    'https://apibox.erweima.ai/api/v1/generate',
+    { model: "V4_5", customMode: true, instrumental: false, title, style: stylePrompt, prompt: lyrics, callbackUrl: process.env.CALLBACK_URL },
+    { headers: { 'Content-Type':'application/json', Authorization:`Bearer ${process.env.SUNO_API_KEY}` } }
+  );
+  if (res.data.code !== 200 || !res.data.data?.taskId) throw new Error('No taskId de Suno');
+  return res.data.data.taskId;
+}
 
 
 /**
@@ -289,10 +321,139 @@ async function sendGuiones() {
 }
 
 
+// ————— Funciones para generación de canciones —————
+
+async function generarLetraParaMusica() {
+  const snap = await db.collection('musica').where('status','==','Sin letra').limit(1).get();
+  if (snap.empty) return;
+  const doc = snap.docs[0], d = doc.data();
+  const prompt = `
+Escribe una letra de canción con lenguaje simple siguiendo esta estructura:
+verso 1, verso 2, coro, verso 3, verso 4 y coro.
+Agrega título en negritas.
+Propósito: ${d.purpose}.
+Nombre: ${d.includeName}.
+Anecdotas: ${d.anecdotes}.
+`.trim();
+  const resp = await openai.createChatCompletion({
+    model:'gpt-4o',
+    messages:[
+      {role:'system',content:'Eres un compositor creativo.'},
+      {role:'user',content:prompt}
+    ],
+    max_tokens:400
+  });
+  const lyrics = resp.data.choices?.[0]?.message?.content?.trim();
+  await doc.ref.update({ lyrics, status:'Sin prompt', lyricsGeneratedAt: FieldValue.serverTimestamp() });
+}
+
+async function generarPromptParaMusica() {
+  const snap = await db.collection('musica').where('status','==','Sin prompt').limit(1).get();
+  if (snap.empty) return;
+  const doc = snap.docs[0], { artist, genre, voiceType } = doc.data();
+  const draft = `Crea un prompt para Suno de una canción estilo ${artist}, género ${genre}, tipo de voz ${voiceType}, lista solo elementos separados por comas (máx 120 caracteres).`;
+  const gpt = await openai.createChatCompletion({
+    model:'gpt-4o',
+    messages:[
+      {role:'system',content:'Eres un redactor creativo de prompts musicales.'},
+      {role:'user',content:`Refina para <120 caracteres: "${draft}"`}
+    ]
+  });
+  const stylePrompt = gpt.data.choices[0].message.content.trim();
+  await doc.ref.update({ stylePrompt, status:'Sin música' });
+}
+
+async function generarMusicaConSuno() {
+  const snap = await db.collection('musica').where('status','==','Sin música').limit(1).get();
+  if (snap.empty) return;
+  const doc = snap.docs[0];
+  await doc.ref.update({ status:'Procesando música', generatedAt: FieldValue.serverTimestamp() });
+  try {
+    const taskId = await lanzarTareaSuno({
+      title: doc.data().purpose.slice(0,30),
+      stylePrompt: doc.data().stylePrompt,
+      lyrics: doc.data().lyrics
+    });
+    await doc.ref.update({ taskId });
+  } catch (e) {
+    await doc.ref.update({ status:'Error música', errorMsg:e.message, updatedAt: FieldValue.serverTimestamp() });
+  }
+}
+
+async function procesarClips() {
+  const snap = await db.collection('musica').where('status','==','Audio listo').get();
+  if (snap.empty) return;
+  for (const doc of snap.docs) {
+    const id = doc.id, fullUrl = doc.data().fullUrl;
+    await doc.ref.update({ status:'Generando clip' });
+    const tmpFull = path.join(os.tmpdir(),`${id}-full.mp3`);
+    const tmpClip = path.join(os.tmpdir(),`${id}-clip.mp3`);
+    const waterTmp = path.join(os.tmpdir(),'watermark.mp3');
+    const tmpWater = path.join(os.tmpdir(),`${id}-water.mp3`);
+    await downloadStream(fullUrl, tmpFull);
+    await new Promise((r,e)=>ffmpeg(tmpFull).setStartTime(0).setDuration(60).output(tmpClip).on('end',r).on('error',e).run());
+    await downloadStream(process.env.WATERMARK_URL, waterTmp);
+    await new Promise((r,e)=>ffmpeg().input(tmpClip).input(waterTmp)
+      .complexFilter(['[1]adelay=1000|1000,volume=0.3[wm];[0][wm]amix=inputs=2:duration=first'])
+      .output(tmpWater).on('end',r).on('error',e).run());
+    const [file] = await bucket.upload(tmpWater, {
+      destination:`musica/clip/${id}-clip.mp3`,
+      metadata:{contentType:'audio/mpeg'}
+    });
+    const [clipUrl] = await file.getSignedUrl({ action:'read', expires:Date.now()+86400000 });
+    await doc.ref.update({ clipUrl, status:'Enviar música' });
+    [tmpFull,tmpClip,waterTmp,tmpWater].forEach(f=>fs.unlinkSync(f));
+  }
+}
+
+async function enviarMusicaPorWhatsApp() {
+  const snap = await db.collection('musica').where('status','==','Enviar música').get();
+  if (snap.empty) return;
+  for (const doc of snap.docs) {
+    const d = doc.data();
+    const phone = (d.leadPhone||'').replace(/\D/g,''), lyrics = d.lyrics, clip = d.clipUrl;
+    if (!phone||!lyrics||!clip) continue;
+    if (Date.now() - d.createdAt.toDate().getTime() < 15*60_000) continue;
+    const { sendTextMessage, sendAudioMessage } = await import('./whatsappService.js');
+    const lead = (await db.collection('leads').doc(d.leadId).get()).data();
+    const name = lead.nombre?.split(' ')[0]||'';
+    await sendTextMessage(phone, `Hola ${name}, aquí la letra:\n\n${lyrics}`);
+    await sendTextMessage(phone, `¿Cómo la vez? Ahora escucha el clip.`);
+    await sendAudioMessage(phone, clip);
+    await doc.ref.update({ status:'Enviada', sentAt: FieldValue.serverTimestamp() });
+    await db.collection('leads').doc(d.leadId)
+      .update({ secuenciasActivas: FieldValue.arrayUnion({ trigger:'CancionEnviada', startTime:new Date().toISOString(), index:0 }) });
+  }
+}
+
+async function retryStuckMusic(thresholdMin = 10) {
+  const cutoff = Date.now() - thresholdMin*60_000;
+  const snap = await db.collection('musica')
+    .where('status','==','Procesando música')
+    .where('generatedAt','<=',new Date(cutoff))
+    .get();
+  for (const doc of snap.docs) {
+    await doc.ref.update({
+      status:'Sin música',
+      taskId: FieldValue.delete(),
+      errorMsg: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp()
+    });
+  }
+}
+
+
 
 export {
   processSequences,
   generateGuiones,
-  sendGuiones
+  sendGuiones,
+  generarLetraParaMusica,
+  generarPromptParaMusica,
+  generarMusicaConSuno,
+  procesarClips,
+  enviarMusicaPorWhatsApp,
+  retryStuckMusic
 };
+
 
