@@ -9,6 +9,8 @@ import os from 'os';
 import path from 'path';
 import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
+import { sendTextMessage, sendAudioMessage } from './whatsappService.js';
+
 
 
 
