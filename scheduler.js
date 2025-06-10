@@ -390,49 +390,52 @@ async function procesarClips() {
 
 
 
+import axios from 'axios';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { sendTextMessage, sendAudioMessage } from './whatsappService.js';
+import { FieldValue } from 'firebase-admin/firestore';
+
 async function enviarMusicaPorWhatsApp() {
-  const snap = await db.collection('musica').where('status','==','Enviar música').get();
+  const snap = await db.collection('musica').where('status', '==', 'Enviar música').get();
   if (snap.empty) return;
   const now = Date.now();
 
   for (const docSnap of snap.docs) {
-    const data    = docSnap.data();
-    const ref     = docSnap.ref;
+    const data  = docSnap.data();
+    const ref   = docSnap.ref;
     const { leadId, leadPhone, lyrics, clipUrl, createdAt } = data;
-    
-    // Sólo enviamos si pasaron ≥15 min desde creado
-    if (!leadPhone || !lyrics || !clipUrl ||
-        now - (createdAt?.toDate()?.getTime()||now) < 15*60_000) {
-      continue;
-    }
+    if (!leadPhone || !lyrics || !clipUrl) continue;
+    if (now - (createdAt?.toDate()?.getTime() || now) < 15 * 60_000) continue;
 
     try {
-      const jid = `${leadPhone.replace(/\D/g,'')}@s.whatsapp.net`;
-      const sock = getWhatsAppSock();
-
       // 1) Saludo + letra
-      const leadName = (await db.collection('leads').doc(leadId).get())
-                         .data()?.nombre?.split(' ')[0] || '';
+      const leadDoc = await db.collection('leads').doc(leadId).get();
+      const leadName = leadDoc.exists
+        ? leadDoc.data().nombre.split(' ')[0]
+        : '';
       const saludo = leadName
         ? `Hola ${leadName}, esta es la letra:\n\n${lyrics}`
         : `Esta es la letra:\n\n${lyrics}`;
-      await sock.sendMessage(jid, { text: saludo });
 
-      // 2) Feedback
-      await sock.sendMessage(jid, { text: '¿Cómo la vez? Ahora escucha el clip.' });
+      await sendTextMessage(leadPhone, saludo);
+      await sendTextMessage(leadPhone, '¿Cómo la vez? Ahora escucha el clip.');
 
-      // 3) Descargar el MP3
-      const resp = await axios.get(clipUrl, { responseType: 'arraybuffer' });
-      const mp3Buffer = Buffer.from(resp.data);
-
-      // 4) Enviar como audio/mp3
-      await sock.sendMessage(jid, {
-        audio: mp3Buffer,
-        mimetype: 'audio/mpeg',
-        ptt: false
+      // 2) Descargar el clip a tmp
+      const tmpPath = path.join(os.tmpdir(), `${docSnap.id}-clip.mp3`);
+      const resp = await axios.get(clipUrl, { responseType: 'stream' });
+      await new Promise((res, rej) => {
+        const ws = fs.createWriteStream(tmpPath);
+        resp.data.pipe(ws);
+        ws.on('finish', res);
+        ws.on('error', rej);
       });
 
-      // 5) Marcar enviado y disparar siguiente secuencia
+      // 3) Enviar como nota de voz
+      await sendAudioMessage(leadPhone, tmpPath);
+
+      // 4) Marca enviado y dispara siguiente secuencia
       await ref.update({ status: 'Enviada', sentAt: FieldValue.serverTimestamp() });
       await db.collection('leads').doc(leadId).update({
         secuenciasActivas: FieldValue.arrayUnion({
@@ -443,11 +446,15 @@ async function enviarMusicaPorWhatsApp() {
       });
 
       console.log(`✅ Música enviada a ${leadPhone}`);
+
+      // 5) Limpia tmp
+      fs.unlinkSync(tmpPath);
     } catch (err) {
       console.error(`❌ Error enviando música para doc ${docSnap.id}:`, err);
     }
   }
 }
+
 
 // 6) Reintento de stuck
 async function retryStuckMusic(thresholdMin = 10) {
