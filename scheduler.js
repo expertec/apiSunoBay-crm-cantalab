@@ -398,15 +398,24 @@ async function enviarMusicaPorWhatsApp() {
 
   for (const docSnap of snap.docs) {
     const data = docSnap.data(), ref = docSnap.ref;
-    const { leadId, leadPhone, lyrics, clip, createdAt } = data;
-    if (!leadPhone||!lyrics||!clip) continue;
+    const {
+      leadId,
+      leadPhone,
+      lyrics,
+      clipUrl,
+      createdAt
+    } = docSnap.data();
+
+
+
+    if (!leadPhone||!lyrics||!clipUrl) continue;
     if (now - (createdAt?.toDate()?.getTime()||now) < 15*60_000) continue;
 
     try {
       const leadName = (await db.collection('leads').doc(leadId).get()).data()?.nombre?.split(' ')[0]||'';
       await getWhatsAppSock().sendMessage(`${leadPhone}@s.whatsapp.net`, { text: `Hola ${leadName}, esta es la letra:\n\n${lyrics}` });
       await getWhatsAppSock().sendMessage(`${leadPhone}@s.whatsapp.net`, { text: `¿Cómo la vez? Ahora escucha el clip.` });
-      await getWhatsAppSock().sendMessage(`${leadPhone}@s.whatsapp.net`, { audio: { url: clip }, ptt: false });
+      await getWhatsAppSock().sendMessage(`${leadPhone}@s.whatsapp.net`, { audio: { url: clipUrl }, ptt: false });
 
       await ref.update({ status: 'Enviada', sentAt: FieldValue.serverTimestamp() });
       await db.collection('leads').doc(leadId).update({
