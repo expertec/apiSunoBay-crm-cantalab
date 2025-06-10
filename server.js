@@ -12,7 +12,6 @@ import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import axios from 'axios';
 import os from 'os';               // ← Asegúrate de importar
 
-import fs from 'fs';
 import { db, admin } from './firebaseAdmin.js';
 
 
