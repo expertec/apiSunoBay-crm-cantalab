@@ -32,8 +32,6 @@ import {
 
 import {
   processSequences,
-  generateGuiones,
-  sendGuiones,
   generarLetraParaMusica,
   generarPromptParaMusica,
   generarMusicaConSuno,
@@ -239,17 +237,7 @@ app.listen(port, () => {
   processSequences().catch(err => console.error('Error en processSequences:', err));
 });
 
-// Genera guiones pendientes cada minuto
-cron.schedule('* * * * *', () => {
-  console.log('🖋️ generateGuiones:', new Date().toISOString());
-  generateGuiones().catch(err => console.error('Error en generateGuiones:', err));
-});
 
-// Envía guiones pendientes cada minuto
-cron.schedule('* * * * *', () => {
-  console.log('📨 sendGuiones:', new Date().toISOString());
-  sendGuiones().catch(err => console.error('Error en sendGuiones:', err));
-});
 
 // Música
 cron.schedule('*/1 * * * *', generarLetraParaMusica);
