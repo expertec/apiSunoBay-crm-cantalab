@@ -390,44 +390,61 @@ async function procesarClips() {
 
 
 
-// 5) Enviar por WhatsApp
 async function enviarMusicaPorWhatsApp() {
   const snap = await db.collection('musica').where('status','==','Enviar música').get();
   if (snap.empty) return;
   const now = Date.now();
 
   for (const docSnap of snap.docs) {
-    const data = docSnap.data(), ref = docSnap.ref;
-    const {
-      leadId,
-      leadPhone,
-      lyrics,
-      clipUrl,
-      createdAt
-    } = docSnap.data();
-
-
-
-    if (!leadPhone||!lyrics||!clipUrl) continue;
-    if (now - (createdAt?.toDate()?.getTime()||now) < 15*60_000) continue;
+    const data    = docSnap.data();
+    const ref     = docSnap.ref;
+    const { leadId, leadPhone, lyrics, clipUrl, createdAt } = data;
+    
+    // Sólo enviamos si pasaron ≥15 min desde creado
+    if (!leadPhone || !lyrics || !clipUrl ||
+        now - (createdAt?.toDate()?.getTime()||now) < 15*60_000) {
+      continue;
+    }
 
     try {
-      const leadName = (await db.collection('leads').doc(leadId).get()).data()?.nombre?.split(' ')[0]||'';
-      await getWhatsAppSock().sendMessage(`${leadPhone}@s.whatsapp.net`, { text: `Hola ${leadName}, esta es la letra:\n\n${lyrics}` });
-      await getWhatsAppSock().sendMessage(`${leadPhone}@s.whatsapp.net`, { text: `¿Cómo la vez? Ahora escucha el clip.` });
-      await getWhatsAppSock().sendMessage(`${leadPhone}@s.whatsapp.net`, { audio: { url: clipUrl }, ptt: false });
+      const jid = `${leadPhone.replace(/\D/g,'')}@s.whatsapp.net`;
+      const sock = getWhatsAppSock();
 
+      // 1) Saludo + letra
+      const leadName = (await db.collection('leads').doc(leadId).get())
+                         .data()?.nombre?.split(' ')[0] || '';
+      const saludo = leadName
+        ? `Hola ${leadName}, esta es la letra:\n\n${lyrics}`
+        : `Esta es la letra:\n\n${lyrics}`;
+      await sock.sendMessage(jid, { text: saludo });
+
+      // 2) Feedback
+      await sock.sendMessage(jid, { text: '¿Cómo la vez? Ahora escucha el clip.' });
+
+      // 3) Descargar el MP3
+      const resp = await axios.get(clipUrl, { responseType: 'arraybuffer' });
+      const mp3Buffer = Buffer.from(resp.data);
+
+      // 4) Enviar como audio/mp3
+      await sock.sendMessage(jid, {
+        audio: mp3Buffer,
+        mimetype: 'audio/mpeg',
+        ptt: false
+      });
+
+      // 5) Marcar enviado y disparar siguiente secuencia
       await ref.update({ status: 'Enviada', sentAt: FieldValue.serverTimestamp() });
       await db.collection('leads').doc(leadId).update({
         secuenciasActivas: FieldValue.arrayUnion({
-          trigger:'CancionEnviada',
+          trigger:   'CancionEnviada',
           startTime: new Date().toISOString(),
-          index: 0
+          index:     0
         })
       });
+
       console.log(`✅ Música enviada a ${leadPhone}`);
     } catch (err) {
-      console.error(`❌ Error enviando a ${leadPhone}:`, err);
+      console.error(`❌ Error enviando música para doc ${docSnap.id}:`, err);
     }
   }
 }
