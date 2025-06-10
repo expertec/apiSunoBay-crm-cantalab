@@ -209,7 +209,7 @@ async function processSequences() {
 
 
 // 1) Generar letra
-export async function generarLetraParaMusica() {
+async function generarLetraParaMusica() {
   const snap = await db.collection('musica').where('status','==','Sin letra').limit(1).get();
   if (snap.empty) return;
   const docSnap = snap.docs[0], d = docSnap.data();
@@ -250,7 +250,7 @@ Anecdotas: ${d.anecdotes}.
 }
 
 // 2) Generar prompt
-export async function generarPromptParaMusica() {
+async function generarPromptParaMusica() {
   const snap = await db.collection('musica').where('status','==','Sin prompt').limit(1).get();
   if (snap.empty) return;
   const docSnap = snap.docs[0];
@@ -277,7 +277,7 @@ lista solo elementos separados por comas (máx 120 caracteres).
 }
 
 // 3) Lanzar Suno
-export async function generarMusicaConSuno() {
+ async function generarMusicaConSuno() {
   const snap = await db.collection('musica').where('status','==','Sin música').limit(1).get();
   if (snap.empty) return;
   const docSnap = snap.docs[0], data = docSnap.data();
@@ -305,7 +305,7 @@ export async function generarMusicaConSuno() {
 }
 
 // 4) Procesar clips
-export async function procesarClips() {
+async function procesarClips() {
   const snap = await db.collection('musica').where('status','==','Audio listo').get();
   if (snap.empty) return;
 
@@ -359,7 +359,7 @@ export async function procesarClips() {
 }
 
 // 5) Enviar por WhatsApp
-export async function enviarMusicaPorWhatsApp() {
+async function enviarMusicaPorWhatsApp() {
   const snap = await db.collection('musica').where('status','==','Enviar música').get();
   if (snap.empty) return;
   const now = Date.now();
@@ -392,7 +392,7 @@ export async function enviarMusicaPorWhatsApp() {
 }
 
 // 6) Reintento de stuck
-export async function retryStuckMusic(thresholdMin = 10) {
+async function retryStuckMusic(thresholdMin = 10) {
   const cutoff = Date.now() - thresholdMin*60_000;
   const snap = await db.collection('musica')
     .where('status','==','Procesando música')
