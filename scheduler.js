@@ -390,13 +390,6 @@ async function procesarClips() {
 
 
 
-import axios from 'axios';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { sendTextMessage, sendAudioMessage } from './whatsappService.js';
-import { FieldValue } from 'firebase-admin/firestore';
-
 async function enviarMusicaPorWhatsApp() {
   const snap = await db.collection('musica').where('status', '==', 'Enviar música').get();
   if (snap.empty) return;
