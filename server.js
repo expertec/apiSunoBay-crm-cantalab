@@ -222,12 +222,7 @@ app.listen(port, () => {
     console.error("Error al conectar WhatsApp en startup:", err)
   );
 
-  generateGuiones().catch(err =>
-    console.error("Error inicial en generateGuiones:", err)
-  );
-  sendGuiones().catch(err =>
-    console.error("Error inicial en sendGuiones:", err)
-  );
+
   
 });
 
