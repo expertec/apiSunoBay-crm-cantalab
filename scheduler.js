@@ -298,15 +298,14 @@ lista solo elementos separados por comas (máx 120 caracteres).
   }
 }
 
-// 4) Procesar clips
-async function procesarClips() {
-  const snap = await db.collection('musica').where('status','==','Audio listo').get();
+export async function procesarClips() {
+  const snap = await db.collection('musica').where('status', '==', 'Audio listo').get();
   if (snap.empty) return;
 
   for (const docSnap of snap.docs) {
-    const ref = docSnap.ref;
+    const ref        = docSnap.ref;
     const { fullUrl } = docSnap.data();
-    const id = docSnap.id;
+    const id         = docSnap.id;
 
     if (!fullUrl) {
       console.error(`[${id}] falta fullUrl`);
@@ -314,25 +313,21 @@ async function procesarClips() {
     }
     await ref.update({ status: 'Generando clip' });
 
-    const tmpFull = path.join(os.tmpdir(), `${id}-full.mp3`);
-    const tmpClip = path.join(os.tmpdir(), `${id}-clip.mp3`);
-    const watermarkUrl = 'https://cantalab.com/wp-content/uploads/2025/05/marca-de-agua-1-minuto.mp3';
+    const tmpFull     = path.join(os.tmpdir(), `${id}-full.mp3`);
+    const tmpClip     = path.join(os.tmpdir(), `${id}-clip.mp3`);
+    const watermarkUrl= 'https://cantalab.com/wp-content/uploads/2025/05/marca-de-agua-1-minuto.mp3';
     const watermarkTmp = path.join(os.tmpdir(), 'watermark.mp3');
-    const tmpWater = path.join(os.tmpdir(), `${id}-watermarked.mp3`);
+    const tmpWater    = path.join(os.tmpdir(), `${id}-watermarked.mp3`);
 
-    // Descargar full
+    // 1) Descargar full
     await downloadStream(fullUrl, tmpFull);
-    if (!fs.existsSync(tmpFull)) {
-      console.error(`[${id}] descarga full fallida`);
-      await ref.update({ status: 'Error descarga full' });
-      continue;
-    }
 
-    // Clipper
+    // 2) Generar clip de 60s
     try {
       await new Promise((res, rej) => {
         ffmpeg(tmpFull)
-          .setStartTime(0).setDuration(60)
+          .setStartTime(0)
+          .setDuration(60)
           .output(tmpClip)
           .on('end', res)
           .on('error', rej)
@@ -344,21 +339,15 @@ async function procesarClips() {
       continue;
     }
 
-    // Watermark
+    // 3) Descargar watermark y mezclar
     await downloadStream(watermarkUrl, watermarkTmp);
-    if (!fs.existsSync(watermarkTmp)) {
-      console.error(`[${id}] descarga watermark fallida`);
-      await ref.update({ status: 'Error watermark descarga' });
-      continue;
-    }
     try {
       await new Promise((res, rej) => {
         ffmpeg()
           .input(tmpClip)
           .input(watermarkTmp)
           .complexFilter([
-            '[1]adelay=1000|1000,volume=0.3[wm];' +
-            '[0][wm]amix=inputs=2:duration=first'
+            '[1]adelay=1000|1000,volume=0.3[wm];[0][wm]amix=inputs=2:duration=first'
           ])
           .output(tmpWater)
           .on('end', res)
@@ -371,16 +360,20 @@ async function procesarClips() {
       continue;
     }
 
-    // Subir clip
+    // 4) Subir clip y hacerlo público
     try {
+      const dest = `musica/clip/${id}-clip.mp3`;
       const [file] = await bucket.upload(tmpWater, {
-        destination: `musica/clip/${id}-clip.mp3`,
-        metadata: { contentType: 'audio/mpeg' }
+        destination: dest,
+        metadata:    { contentType: 'audio/mpeg' }
       });
-      const [clipUrl] = await file.getSignedUrl({
-        action: 'read',
-        expires: Date.now() + 24*60*60*1000
-      });
+
+      // Hacer el objeto público
+      await file.makePublic();
+
+      // Construir URL pública
+      const clipUrl = `https://storage.googleapis.com/${bucket.name}/${file.name}`;
+
       await ref.update({ clipUrl, status: 'Enviar música' });
       console.log(`[${id}] clip listo → Enviar música`);
     } catch (err) {
@@ -388,7 +381,7 @@ async function procesarClips() {
       await ref.update({ status: 'Error upload clip' });
     }
 
-    // Limpieza
+    // 5) Limpieza de temporales
     [tmpFull, tmpClip, watermarkTmp, tmpWater].forEach(f => {
       try { fs.unlinkSync(f) } catch {}
     });

@@ -105,24 +105,24 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
 
     // 2) Súbelo a Firebase Storage
     const dest = `musica/full/${taskId}.mp3`;
-    await bucket.upload(tmpFull, {
+    const [file] = await bucket.upload(tmpFull, {
       destination: dest,
       metadata: { contentType: 'audio/mpeg' }
     });
 
-    // 3) Genera URL firmada pública
-    const [fullUrl] = await bucket
-      .file(dest)
-      .getSignedUrl({ action: 'read', expires: Date.now() + 86400_000 });
+    // 3) Haz el archivo público
+    await file.makePublic();
+    // 4) Construye la URL pública (sin firma ni expiración)
+    const fullUrl = `https://storage.googleapis.com/${bucket.name}/${file.name}`;
 
-    // 4) Actualiza el documento para que procesarClips() lo recoja
+    // 5) Actualiza el documento para que procesarClips() lo recoja
     await docRef.update({
       fullUrl,
       status: 'Audio listo',
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // 5) Limpia el archivo temporal
+    // 6) Limpia el archivo temporal
     fs.unlink(tmpFull, () => {});
 
     return res.sendStatus(200);
