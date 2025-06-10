@@ -393,3 +393,52 @@ export async function sendAudioMessage(phone, filePath) {
             .update({ lastMessageAt: msgData.timestamp });
   }
 }
+
+/**
+ * Envía un clip de audio MP3 descargado localmente.
+ * @param {string} phone     — número limpio (solo dígitos, con código de país).
+ * @param {string} filePath  — ruta al archivo .mp3 en el servidor.
+ */
+export async function sendClipMessage(phone, filePath) {
+  const sock = getWhatsAppSock();
+  if (!sock) throw new Error('Socket de WhatsApp no está conectado');
+
+  // Normalizar el número
+  let num = String(phone).replace(/\D/g, '');
+  // Si necesitas E.164 para tu caso, por ejemplo:
+  if (num.length === 10) num = '52' + num;
+  const jid = `${num}@s.whatsapp.net`;
+
+  // 1) Leer el buffer del MP3
+  const audioBuffer = fs.readFileSync(filePath);
+
+  // 2) Enviar a través de Baileys como audio/mp3 (no PTT)
+  await sock.sendMessage(jid, {
+    audio: audioBuffer,
+    mimetype: 'audio/mpeg',
+    ptt: false
+  });
+
+  // 3) (Opcional) Guardar en Firestore, si quieres registrar en tu CRM
+  const q = await db.collection('leads')
+                    .where('telefono', '==', num)
+                    .limit(1)
+                    .get();
+  if (!q.empty) {
+    const leadId = q.docs[0].id;
+    const msgData = {
+      content: '',
+      mediaType: 'audio',
+      mediaUrl: '',     // Si la dejas vacía, se registrará sin URL pública
+      sender: 'business',
+      timestamp: new Date()
+    };
+    await db.collection('leads')
+            .doc(leadId)
+            .collection('messages')
+            .add(msgData);
+    await db.collection('leads')
+            .doc(leadId)
+            .update({ lastMessageAt: msgData.timestamp });
+  }
+}

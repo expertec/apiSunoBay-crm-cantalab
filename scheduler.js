@@ -11,6 +11,7 @@ import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
 // al inicio de src/server/scheduler.js (o donde esté tu enviarMusicaPorWhatsApp)
 import { sendMessageToLead, sendAudioMessage } from './whatsappService.js';
+import { sendClipMessage } from './whatsappService.js';
 
 
 
@@ -400,14 +401,17 @@ async function enviarMusicaPorWhatsApp() {
   const now = Date.now();
 
   for (const docSnap of snap.docs) {
-    const data  = docSnap.data();
-    const ref   = docSnap.ref;
+    const data = docSnap.data();
+    const ref = docSnap.ref;
     const { leadId, leadPhone, lyrics, clipUrl, createdAt } = data;
+
+    // 1) Validaciones básicas
     if (!leadPhone || !lyrics || !clipUrl) continue;
-    if (now - (createdAt?.toDate()?.getTime() || now) < 15 * 60_000) continue;
+    const createdTime = createdAt?.toDate?.().getTime() || now;
+    if (now - createdTime < 15 * 60_000) continue;
 
     try {
-      // 1) Saludo + letra
+      // 2) Saludo + letra
       const leadDoc = await db.collection('leads').doc(leadId).get();
       const leadName = leadDoc.exists
         ? leadDoc.data().nombre.split(' ')[0]
@@ -416,11 +420,10 @@ async function enviarMusicaPorWhatsApp() {
         ? `Hola ${leadName}, esta es la letra:\n\n${lyrics}`
         : `Esta es la letra:\n\n${lyrics}`;
 
-   await sendMessageToLead(leadPhone, saludo);
-await sendMessageToLead(leadPhone, '¿Cómo la vez? Ahora escucha el clip.');
+      await sendMessageToLead(leadPhone, saludo);
+      await sendMessageToLead(leadPhone, '¿Cómo la vez? Ahora escucha el clip.');
 
-
-      // 2) Descargar el clip a tmp
+      // 3) Descargar el clip a un archivo temporal
       const tmpPath = path.join(os.tmpdir(), `${docSnap.id}-clip.mp3`);
       const resp = await axios.get(clipUrl, { responseType: 'stream' });
       await new Promise((res, rej) => {
@@ -430,28 +433,32 @@ await sendMessageToLead(leadPhone, '¿Cómo la vez? Ahora escucha el clip.');
         ws.on('error', rej);
       });
 
-      // 3) Enviar como nota de voz
-      await sendAudioMessage(leadPhone, tmpPath);
+      // 4) Enviar el clip como MP3 (no PTT)
+      await sendClipMessage(leadPhone, tmpPath);
 
-      // 4) Marca enviado y dispara siguiente secuencia
-      await ref.update({ status: 'Enviada', sentAt: FieldValue.serverTimestamp() });
+      // 5) Marcar como enviado y disparar siguiente secuencia
+      await ref.update({
+        status: 'Enviada',
+        sentAt: FieldValue.serverTimestamp()
+      });
       await db.collection('leads').doc(leadId).update({
         secuenciasActivas: FieldValue.arrayUnion({
-          trigger:   'CancionEnviada',
+          trigger: 'CancionEnviada',
           startTime: new Date().toISOString(),
-          index:     0
+          index: 0
         })
       });
 
       console.log(`✅ Música enviada a ${leadPhone}`);
 
-      // 5) Limpia tmp
+      // 6) Limpieza del archivo temporal
       fs.unlinkSync(tmpPath);
     } catch (err) {
       console.error(`❌ Error enviando música para doc ${docSnap.id}:`, err);
     }
   }
 }
+
 
 
 // 6) Reintento de stuck
