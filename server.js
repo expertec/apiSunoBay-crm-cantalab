@@ -10,6 +10,11 @@ import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import axios from 'axios';
+import os from 'os';               // ← Asegúrate de importar
+
+import fs from 'fs';
+import { db, admin } from './firebaseAdmin.js';
+
 
 // Dile a fluent-ffmpeg dónde está el binario
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
@@ -20,7 +25,7 @@ import { sendAudioMessage } from './whatsappService.js';  // ajusta ruta si es n
 
 dotenv.config();
 
-import { db, admin } from './firebaseAdmin.js';
+
 
 import {
   connectToWhatsApp,
