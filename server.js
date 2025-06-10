@@ -13,6 +13,7 @@ import axios from 'axios';
 import os from 'os';               // ← Asegúrate de importar
 
 import { db, admin } from './firebaseAdmin.js';
+const bucket = admin.storage().bucket();
 
 
 // Dile a fluent-ffmpeg dónde está el binario
