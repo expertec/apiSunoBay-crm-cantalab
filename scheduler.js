@@ -298,7 +298,7 @@ lista solo elementos separados por comas (máx 120 caracteres).
   }
 }
 
-export async function procesarClips() {
+async function procesarClips() {
   const snap = await db.collection('musica').where('status', '==', 'Audio listo').get();
   if (snap.empty) return;
 
