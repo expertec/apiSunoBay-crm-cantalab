@@ -399,46 +399,43 @@ export async function sendAudioMessage(phone, filePath) {
  * @param {string} phone     — número limpio (solo dígitos, con código de país).
  * @param {string} filePath  — ruta al archivo .mp3 en el servidor.
  */
+// whatsappService.js
 export async function sendClipMessage(phone, filePath) {
   const sock = getWhatsAppSock();
-  if (!sock) throw new Error('Socket de WhatsApp no está conectado');
+  if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
-  // Normalizar el número
+  // Normaliza el número (añade +52 si hacía falta)
   let num = String(phone).replace(/\D/g, '');
-  // Si necesitas E.164 para tu caso, por ejemplo:
   if (num.length === 10) num = '52' + num;
   const jid = `${num}@s.whatsapp.net`;
 
-  // 1) Leer el buffer del MP3
-  const audioBuffer = fs.readFileSync(filePath);
+  // Lee el MP3
+  const buffer = fs.readFileSync(filePath);
 
-  // 2) Enviar a través de Baileys como audio/mp3 (no PTT)
+  // Envía como documento .mp3 para que el cliente lo abra y reproduzca
   await sock.sendMessage(jid, {
-    audio: audioBuffer,
+    document: buffer,
     mimetype: 'audio/mpeg',
-    ptt: false
+    fileName: path.basename(filePath)
   });
 
-  // 3) (Opcional) Guardar en Firestore, si quieres registrar en tu CRM
+  // (Opcional) registra en Firestore
   const q = await db.collection('leads')
-                    .where('telefono', '==', num)
+                    .where('telefono','==', num)
                     .limit(1)
                     .get();
   if (!q.empty) {
     const leadId = q.docs[0].id;
-    const msgData = {
-      content: '',
-      mediaType: 'audio',
-      mediaUrl: '',     // Si la dejas vacía, se registrará sin URL pública
-      sender: 'business',
-      timestamp: new Date()
-    };
-    await db.collection('leads')
-            .doc(leadId)
-            .collection('messages')
-            .add(msgData);
-    await db.collection('leads')
-            .doc(leadId)
-            .update({ lastMessageAt: msgData.timestamp });
+    await db.collection('leads').doc(leadId)
+      .collection('messages')
+      .add({
+        content: '',
+        mediaType: 'audio',
+        mediaUrl: '',       // si quieres puedes guardar la pública aquí
+        sender: 'business',
+        timestamp: new Date()
+      });
+    await db.collection('leads').doc(leadId)
+      .update({ lastMessageAt: new Date() });
   }
 }
