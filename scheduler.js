@@ -9,7 +9,9 @@ import os from 'os';
 import path from 'path';
 import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
-import { sendTextMessage, sendAudioMessage } from './whatsappService.js';
+// al inicio de src/server/scheduler.js (o donde esté tu enviarMusicaPorWhatsApp)
+import { sendMessageToLead, sendAudioMessage } from './whatsappService.js';
+
 
 
 
@@ -414,8 +416,9 @@ async function enviarMusicaPorWhatsApp() {
         ? `Hola ${leadName}, esta es la letra:\n\n${lyrics}`
         : `Esta es la letra:\n\n${lyrics}`;
 
-      await sendTextMessage(leadPhone, saludo);
-      await sendTextMessage(leadPhone, '¿Cómo la vez? Ahora escucha el clip.');
+   await sendMessageToLead(leadPhone, saludo);
+await sendMessageToLead(leadPhone, '¿Cómo la vez? Ahora escucha el clip.');
+
 
       // 2) Descargar el clip a tmp
       const tmpPath = path.join(os.tmpdir(), `${docSnap.id}-clip.mp3`);
