@@ -409,7 +409,6 @@ export async function sendAudioMessage(phone, filePath) {
   }
 }
 
-
 /**
  * Envía un clip de audio MP3 (no PTT) al lead vía Baileys.
  * @param {string} phone    — número limpio (solo dígitos, con código de país opcional).
@@ -417,9 +416,7 @@ export async function sendAudioMessage(phone, filePath) {
  */
 export async function sendClipMessage(phone, filePath) {
   const sock = getWhatsAppSock();
-  if (!sock) {
-    throw new Error('No hay conexión activa con WhatsApp');
-  }
+  if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
   // 1) Normalizar número: quitar no dígitos y añadir prefijo MX si es 10 dígitos
   let num = String(phone).replace(/\D/g, '');
@@ -429,14 +426,15 @@ export async function sendClipMessage(phone, filePath) {
   // 2) Leer el buffer del MP3
   const audioBuffer = fs.readFileSync(filePath);
 
-  // 3) Enviar como audio MP3 (no PTT), desactivar link previews y extender timeout
+  // 3) Enviar como audio/mp3 (no PTT), con nombre de archivo y duración
   await sock.sendMessage(
     jid,
     {
       audio: audioBuffer,
       mimetype: 'audio/mpeg',
-      fileName: path.basename(filePath),  // importante para que WhatsApp lo reconozca
-      
+      fileName: path.basename(filePath),
+      ptt: false,
+      seconds: 60  // duración en segundos
     },
     {
       timeoutMs: 60_000,
@@ -444,7 +442,7 @@ export async function sendClipMessage(phone, filePath) {
     }
   );
 
-  // 4) (Opcional) Registrar en Firestore bajo sender 'business'
+  // 4) Registrar en Firestore bajo sender 'business' (opcional)
   const q = await db
     .collection('leads')
     .where('telefono', '==', num)
@@ -456,7 +454,7 @@ export async function sendClipMessage(phone, filePath) {
     const msgData = {
       content: '',
       mediaType: 'audio',
-      mediaUrl: '',      // deja vacío o guarda la URL pública si la tienes
+      mediaUrl: '',    // deja vacío o pon la URL pública si la tienes
       sender: 'business',
       timestamp: new Date()
     };
