@@ -286,42 +286,57 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
 }
 
 export async function sendMessageToLead(phone, messageContent) {
-  try {
-    if (!whatsappSock) throw new Error('No hay conexión activa con WhatsApp');
-    // Normalizar E.164 sin '+'
-    let num = String(phone).replace(/\D/g, '');
-    if (num.length === 10) num = '52' + num;
-    const jid = `${num}@s.whatsapp.net`;
-
-    // Enviar mensaje
-    await whatsappSock.sendMessage(jid, { text: messageContent });
-
-    // Guardar en Firestore bajo sender 'business'
-    const q = await db.collection('leads')
-                     .where('telefono', '==', num)
-                     .limit(1)
-                     .get();
-    if (!q.empty) {
-      const leadId = q.docs[0].id;
-      const outMsg = {
-        content: messageContent,
-        sender: 'business',
-        timestamp: new Date()
-      };
-      await db.collection('leads')
-              .doc(leadId)
-              .collection('messages')
-              .add(outMsg);
-      await db.collection('leads')
-              .doc(leadId)
-              .update({ lastMessageAt: outMsg.timestamp });
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error("Error enviando mensaje de WhatsApp:", error);
-    throw error;
+  if (!whatsappSock) {
+    throw new Error('No hay conexión activa con WhatsApp');
   }
+
+  // 1) Normalizar número: quitar no dígitos y añadir prefijo MX si es 10 dígitos
+  let num = String(phone).replace(/\D/g, '');
+  if (num.length === 10) num = '52' + num;
+  const jid = `${num}@s.whatsapp.net`;
+
+  // 2) Enviar mensaje de texto sin link preview y con timeout extendido
+  await whatsappSock.sendMessage(
+    jid,
+    {
+      text: messageContent,
+      linkPreview: false
+    },
+    {
+      timeoutMs: 60_000
+    }
+  );
+
+  // 3) Guardar en Firestore bajo sender 'business'
+  const q = await db
+    .collection('leads')
+    .where('telefono', '==', num)
+    .limit(1)
+    .get();
+
+  if (!q.empty) {
+    const leadId = q.docs[0].id;
+    const outMsg = {
+      content: messageContent,
+      sender: 'business',
+      timestamp: new Date()
+    };
+
+    // 3a) Añadir al subcolección messages
+    await db
+      .collection('leads')
+      .doc(leadId)
+      .collection('messages')
+      .add(outMsg);
+
+    // 3b) Actualizar lastMessageAt del lead
+    await db
+      .collection('leads')
+      .doc(leadId)
+      .update({ lastMessageAt: outMsg.timestamp });
+  }
+
+  return { success: true };
 }
 
 export function getLatestQR() {
@@ -401,44 +416,62 @@ export async function sendAudioMessage(phone, filePath) {
  * @param {string} filePath  — ruta al archivo .mp3 en el servidor.
  */
 export async function sendClipMessage(phone, filePath) {
-  const sock = getWhatsAppSock();
-  if (!sock) throw new Error('Socket de WhatsApp no está conectado');
+  if (!whatsappSock) {
+    throw new Error('No hay conexión activa con WhatsApp');
+  }
 
-  // Normalizar el número
+  // 1) Normalizar número: quitar no dígitos y añadir prefijo MX si es 10 dígitos
   let num = String(phone).replace(/\D/g, '');
   if (num.length === 10) num = '52' + num;
   const jid = `${num}@s.whatsapp.net`;
 
-  // Leer buffer del MP3
+  // 2) Leer el buffer del MP3
   const audioBuffer = fs.readFileSync(filePath);
 
-  // Enviar como audio/mp3 (no PTT)
-  await sock.sendMessage(jid, {
-    audio: audioBuffer,
-    mimetype: 'audio/mpeg',
-    ptt: false
-  });
+  // 3) Enviar como audio MP3 (no PTT), desactivar link previews y extender timeout
+  await whatsappSock.sendMessage(
+    jid,
+    {
+      audio: audioBuffer,
+      mimetype: 'audio/mpeg',
+      ptt: false
+    },
+    {
+      timeoutMs: 60_000,
+      linkPreview: false
+    }
+  );
 
-  // (Opcional) Registrar en Firestore
-  const q = await db.collection('leads')
-                    .where('telefono', '==', num)
-                    .limit(1)
-                    .get();
+  // 4) (Opcional) Registrar en Firestore bajo sender 'business'
+  const q = await db
+    .collection('leads')
+    .where('telefono', '==', num)
+    .limit(1)
+    .get();
+
   if (!q.empty) {
     const leadId = q.docs[0].id;
     const msgData = {
       content: '',
       mediaType: 'audio',
-      mediaUrl: '',
+      mediaUrl: '',      // puedes dejar vacío o guardar una URL pública
       sender: 'business',
       timestamp: new Date()
     };
-    await db.collection('leads')
-            .doc(leadId)
-            .collection('messages')
-            .add(msgData);
-    await db.collection('leads')
-            .doc(leadId)
-            .update({ lastMessageAt: msgData.timestamp });
+
+    // 4a) Añadir al subcolección messages
+    await db
+      .collection('leads')
+      .doc(leadId)
+      .collection('messages')
+      .add(msgData);
+
+    // 4b) Actualizar lastMessageAt del lead
+    await db
+      .collection('leads')
+      .doc(leadId)
+      .update({ lastMessageAt: msgData.timestamp });
   }
+
+  return { success: true };
 }
