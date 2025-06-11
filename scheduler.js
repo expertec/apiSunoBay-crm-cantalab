@@ -318,42 +318,46 @@ async function procesarClips() {
     }
     await ref.update({ status: 'Generando clip' });
 
-    const tmpFull     = path.join(os.tmpdir(), `${id}-full.mp3`);
-    const tmpClip     = path.join(os.tmpdir(), `${id}-clip.mp3`);
+    const tmpFull   = path.join(os.tmpdir(), `${id}-full.mp3`);
+    const tmpClipAac= path.join(os.tmpdir(), `${id}-clip.m4a`);
     const watermarkUrl= 'https://cantalab.com/wp-content/uploads/2025/05/marca-de-agua-1-minuto.mp3';
     const watermarkTmp = path.join(os.tmpdir(), 'watermark.mp3');
-    const tmpWater    = path.join(os.tmpdir(), `${id}-watermarked.mp3`);
+    const tmpWater  = path.join(os.tmpdir(), `${id}-watermarked.m4a`);
 
     // 1) Descargar full
     await downloadStream(fullUrl, tmpFull);
 
-    // 2) Generar clip de 60s
+    // 2) Clip de 60s y transcode a AAC (.m4a)
     try {
       await new Promise((res, rej) => {
         ffmpeg(tmpFull)
           .setStartTime(0)
           .setDuration(60)
-          .output(tmpClip)
+          .audioCodec('aac')
+          .format('ipod')        // M4A container
+          .output(tmpClipAac)
           .on('end', res)
           .on('error', rej)
           .run();
       });
     } catch (err) {
-      console.error(`[${id}] error clip:`, err);
+      console.error(`[${id}] error generando clip AAC:`, err);
       await ref.update({ status: 'Error clip' });
       continue;
     }
 
-    // 3) Descargar watermark y mezclar
+    // 3) Descargar watermark (mp3) y mezclar a AAC .m4a
     await downloadStream(watermarkUrl, watermarkTmp);
     try {
       await new Promise((res, rej) => {
         ffmpeg()
-          .input(tmpClip)
+          .input(tmpClipAac)
           .input(watermarkTmp)
           .complexFilter([
             '[1]adelay=1000|1000,volume=0.3[wm];[0][wm]amix=inputs=2:duration=first'
           ])
+          .audioCodec('aac')
+          .format('ipod')
           .output(tmpWater)
           .on('end', res)
           .on('error', rej)
@@ -365,33 +369,30 @@ async function procesarClips() {
       continue;
     }
 
-    // 4) Subir clip y hacerlo público
+    // 4) Subir clip .m4a y hacerlo público
     try {
-      const dest = `musica/clip/${id}-clip.mp3`;
+      const dest = `musica/clip/${id}-clip.m4a`;
       const [file] = await bucket.upload(tmpWater, {
         destination: dest,
-        metadata:    { contentType: 'audio/mpeg' }
+        metadata:    { contentType: 'audio/mp4' }
       });
-
-      // Hacer el objeto público
       await file.makePublic();
-
-      // Construir URL pública
       const clipUrl = `https://storage.googleapis.com/${bucket.name}/${file.name}`;
-
       await ref.update({ clipUrl, status: 'Enviar música' });
-      console.log(`[${id}] clip listo → Enviar música`);
+      console.log(`[${id}] clip M4A listo → Enviar música`);
     } catch (err) {
       console.error(`[${id}] error upload clip:`, err);
       await ref.update({ status: 'Error upload clip' });
     }
 
-    // 5) Limpieza de temporales
-    [tmpFull, tmpClip, watermarkTmp, tmpWater].forEach(f => {
-      try { fs.unlinkSync(f) } catch {}
+    // Limpieza
+    [tmpFull, tmpClipAac, watermarkTmp, tmpWater].forEach(f => {
+      try { fs.unlinkSync(f); } catch {}
     });
   }
 }
+
+
 
 
 

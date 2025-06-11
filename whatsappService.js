@@ -414,62 +414,44 @@ export async function sendAudioMessage(phone, filePath) {
  * @param {string} phone    — número limpio (solo dígitos, con código de país opcional).
  * @param {string} filePath — ruta al archivo .mp3 en el servidor.
  */
+
 export async function sendClipMessage(phone, filePath) {
   const sock = getWhatsAppSock();
   if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
-  // 1) Normalizar número: quitar no dígitos y añadir prefijo MX si es 10 dígitos
+  // Normalizar número (prefijo MX si son 10 dígitos)
   let num = String(phone).replace(/\D/g, '');
   if (num.length === 10) num = '52' + num;
   const jid = `${num}@s.whatsapp.net`;
 
-  // 2) Leer el buffer del MP3
+  // Leer buffer de M4A
   const buffer = fs.readFileSync(filePath);
 
-  // 3) Enviar como documento (audio/mp3)
+  // Enviar como audio/mp4 inline (ptt:false)
   await sock.sendMessage(
     jid,
     {
-      document: buffer,
-      mimetype: 'audio/mpeg',
+      audio: buffer,
+      mimetype: 'audio/mp4',
       fileName: path.basename(filePath),
-      fileLength: buffer.length
+      ptt: false
     },
-    {
-      timeoutMs: 60_000,
-      linkPreview: false
-    }
+    { timeoutMs: 60_000, linkPreview: false }
   );
 
-  // 4) Registrar en Firestore bajo sender 'business' (opcional)
-  const q = await db
-    .collection('leads')
-    .where('telefono', '==', num)
-    .limit(1)
-    .get();
-
+  // Registrar en Firestore (opcional)
+  const q = await db.collection('leads').where('telefono','==',num).limit(1).get();
   if (!q.empty) {
     const leadId = q.docs[0].id;
     const msgData = {
       content: '',
       mediaType: 'audio',
-      mediaUrl: '',    // deja vacío o pon la URL pública si la tienes
+      mediaUrl: '',  // podrías guardar clipUrl aquí
       sender: 'business',
       timestamp: new Date()
     };
-
-    // 4a) Añadir al subcolección messages
-    await db
-      .collection('leads')
-      .doc(leadId)
-      .collection('messages')
-      .add(msgData);
-
-    // 4b) Actualizar lastMessageAt del lead
-    await db
-      .collection('leads')
-      .doc(leadId)
-      .update({ lastMessageAt: msgData.timestamp });
+    await db.collection('leads').doc(leadId).collection('messages').add(msgData);
+    await db.collection('leads').doc(leadId).update({ lastMessageAt: msgData.timestamp });
   }
 
   return { success: true };
