@@ -427,19 +427,11 @@ export async function sendClipMessage(phone, filePath) {
   if (num.length === 10) num = '52' + num;
   const jid = `${num}@s.whatsapp.net`;
 
-  // 2) Leer buffer
+  // 2) Leer buffer M4A
   const audioBuffer = fs.readFileSync(filePath);
 
-  // 3) Obtener duración real vía ffprobe
-  const { format } = await new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, data) => {
-      if (err) reject(err);
-      else resolve(data);
-    });
-  });
-  const durationSec = Math.round(format.duration);
-
-  // 4) Enviar como audio/mp4 inline sin engañar con segundos incorrectos
+  // 3) Obtener duración real sin ffmpeg (baileys no requiere seconds exacto)
+  //    WhatsApp mostrará barra de reproducción si es M4A/AAC.
   await sock.sendMessage(
     jid,
     {
@@ -447,12 +439,14 @@ export async function sendClipMessage(phone, filePath) {
       mimetype: 'audio/mp4',
       fileName: path.basename(filePath),
       ptt: false,
-      seconds: durationSec  // ahora sí coincide
     },
-    { timeoutMs: 60_000, linkPreview: false }
+    {
+      timeoutMs: 60_000,
+      linkPreview: false
+    }
   );
 
-  // 5) (Opcional) Registrar en Firestore
+  // 4) Registrar en Firestore (opcional)
   const q = await db.collection('leads')
                   .where('telefono','==',num)
                   .limit(1)
@@ -471,6 +465,5 @@ export async function sendClipMessage(phone, filePath) {
     await db.collection('leads').doc(leadId)
             .update({ lastMessageAt: msgData.timestamp });
   }
-
   return { success: true };
 }
