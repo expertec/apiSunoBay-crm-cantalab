@@ -410,72 +410,44 @@ export async function sendAudioMessage(phone, filePath) {
 }
 
 /**
- * Envía un clip de audio AAC (.m4a) desde URL, con retry y mayor timeout,
- * y registra el mensaje en Firestore.
+ * Envía un clip de audio AAC (.m4a) inline desde su URL.
  *
- * @param {string} phone   — número de teléfono (puede venir con o sin +52)
- * @param {string} clipUrl — URL pública al .m4a (p. ej. Firebase Storage)
+ * @param {string} phone      — número de teléfono (con o sin +52)
+ * @param {string} clipUrl    — URL pública al .m4a (p.ej. Firebase Storage)
  */
 export async function sendClipMessage(phone, clipUrl) {
   const sock = getWhatsAppSock();
   if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
-  // 1) Normalizar teléfono y armar JID
+  // 1) Normalizar teléfono → JID
   let num = String(phone).replace(/\D/g, '');
   if (num.length === 10) num = '52' + num;
   const jid = `${num}@s.whatsapp.net`;
 
-  // 2) Payload del mensaje
+  // 2) Payload de audio directo desde URL
   const messagePayload = {
     audio: { url: clipUrl },
     mimetype: 'audio/mp4',
     ptt: false,
   };
 
-  // 3) Opciones de envío: timeout de 2 minutos, sin marcar como leído
+  // 3) Opciones con timeout extendido y sin marcar como leído
   const sendOpts = {
     timeoutMs: 120_000,
     sendSeen: false,
   };
 
-  // 4) Intentar hasta 3 veces si da timeout
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // 4) Retry automático sólo en “Timed Out”
+  for (let i = 1; i <= 3; i++) {
     try {
       await sock.sendMessage(jid, messagePayload, sendOpts);
-      console.log(`✅ Audio enviado correctamente (intento ${attempt}) a ${jid}`);
-      break;
+      console.log(`✅ clip enviado (intento ${i}) a ${jid}`);
+      return;
     } catch (err) {
-      const isTimeout = err.message?.includes('Timed Out');
-      console.warn(`⚠️ Envío fallo en intento ${attempt}${isTimeout ? ' (Timeout)' : ''}:`, err.message);
-      if (attempt === 3 || !isTimeout) {
-        // Si no es timeout o ya fueron 3 intentos, propaga el error
-        throw err;
-      }
-      // Backoff exponencial antes de reintentar
-      await new Promise(res => setTimeout(res, 2_000 * attempt));
+      const isTO = err.message?.includes('Timed Out');
+      console.warn(`⚠️ fallo envío clip intento ${i}${isTO ? ' (Timeout)' : ''}`);
+      if (i === 3 || !isTO) throw err;
+      await new Promise(r => setTimeout(r, 2_000 * i));
     }
   }
-
-  // 5) Registrar en Firestore
-  const q = await db.collection('leads')
-                    .where('telefono', '==', num)
-                    .limit(1)
-                    .get();
-  if (!q.empty) {
-    const leadId = q.docs[0].id;
-    const timestamp = new Date();
-    const msgData = {
-      content: '',
-      mediaType: 'audio',
-      mediaUrl: clipUrl,
-      sender: 'business',
-      timestamp
-    };
-    await db.collection('leads').doc(leadId)
-            .collection('messages').add(msgData);
-    await db.collection('leads').doc(leadId)
-            .update({ lastMessageAt: timestamp });
-  }
-
-  return { success: true };
 }

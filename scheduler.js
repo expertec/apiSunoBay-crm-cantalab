@@ -16,8 +16,6 @@ import { sendClipMessage } from './whatsappService.js';
 
 
 
-
-
 const bucket = admin.storage().bucket();
 
 const { FieldValue } = admin.firestore;
@@ -401,52 +399,50 @@ async function procesarClips() {
 
 
 
-async function enviarMusicaPorWhatsApp() {
-  const snap = await db.collection('musica').where('status', '==', 'Enviar música').get();
+/**
+ * Lee todos los docs de 'musica' con status 'Enviar música',
+ * envía letra y clip **una sola vez**, y actualiza a 'Enviada'.
+ */
+export async function enviarMusicaPorWhatsApp() {
+  const snap = await db.collection('musica')
+    .where('status', '==', 'Enviar música')
+    .get();
   if (snap.empty) return;
-  const now = Date.now();
 
-  for (const docSnap of snap.docs) {
-    const data = docSnap.data();
-    const ref = docSnap.ref;
-    const { leadId, leadPhone, lyrics, clipUrl, createdAt } = data;
+  for (const doc of snap.docs) {
+    const { leadId, leadPhone, lyrics, clipUrl } = doc.data();
+    const ref = doc.ref;
 
-    // 1) Validaciones básicas
-    if (!leadPhone || !lyrics || !clipUrl) continue;
-    const createdTime = createdAt?.toDate?.().getTime() || now;
-    if (now - createdTime < 15 * 60_000) continue;
+    // Validaciones
+    if (!leadPhone || !lyrics || !clipUrl) {
+      console.warn(`[${doc.id}] faltan datos, status sigue 'Enviar música'`);
+      continue;
+    }
 
     try {
-      // 2) Saludo + letra
+      // 1) Texto con letra
       const leadDoc = await db.collection('leads').doc(leadId).get();
-      const leadName = leadDoc.exists
+      const name = leadDoc.exists
         ? leadDoc.data().nombre.split(' ')[0]
         : '';
-      const saludo = leadName
-        ? `Hola ${leadName}, esta es la letra:\n\n${lyrics}`
+      const saludo = name
+        ? `Hola ${name}, esta es la letra:\n\n${lyrics}`
         : `Esta es la letra:\n\n${lyrics}`;
-
       await sendMessageToLead(leadPhone, saludo);
-      await sendMessageToLead(leadPhone, '¿Cómo la vez? Ahora escucha el clip.');
 
-      // 3) Descargar el clip a un archivo temporal
-      const tmpPath = path.join(os.tmpdir(), `${docSnap.id}-clip.mp3`);
-      const resp = await axios.get(clipUrl, { responseType: 'stream' });
-      await new Promise((res, rej) => {
-        const ws = fs.createWriteStream(tmpPath);
-        resp.data.pipe(ws);
-        ws.on('finish', res);
-        ws.on('error', rej);
-      });
+      // 2) Texto de preámbulo
+      await sendMessageToLead(leadPhone, '¿Cómo la ves? Ahora escucha el clip.');
 
-      // 4) Enviar el clip como MP3 (no PTT)
-      await sendClipMessage(leadPhone, tmpPath);
+      // 3) Audio inline desde URL
+      await sendClipMessage(leadPhone, clipUrl);
 
-      // 5) Marcar como enviado y disparar siguiente secuencia
+      // 4) Marcar como enviado (ya no volverá a entrar en este cron)
       await ref.update({
         status: 'Enviada',
         sentAt: FieldValue.serverTimestamp()
       });
+
+      // 5) (Opcional) Disparar siguiente secuencia
       await db.collection('leads').doc(leadId).update({
         secuenciasActivas: FieldValue.arrayUnion({
           trigger: 'CancionEnviada',
@@ -455,12 +451,14 @@ async function enviarMusicaPorWhatsApp() {
         })
       });
 
-      console.log(`✅ Música enviada a ${leadPhone}`);
-
-      // 6) Limpieza del archivo temporal
-      fs.unlinkSync(tmpPath);
+      console.log(`✅ Música enviada a ${leadPhone} (doc ${doc.id})`);
     } catch (err) {
-      console.error(`❌ Error enviando música para doc ${docSnap.id}:`, err);
+      console.error(`❌ Error en ${doc.id}:`, err);
+      // Actualizar a error para no reintentar infinitamente
+      await ref.update({
+        status: 'Error música',
+        errorMsg: err.message
+      });
     }
   }
 }
