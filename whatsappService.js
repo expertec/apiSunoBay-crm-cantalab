@@ -415,43 +415,61 @@ export async function sendAudioMessage(phone, filePath) {
  * @param {string} filePath — ruta al archivo .mp3 en el servidor.
  */
 
+/**
+ * Envía un clip de audio M4A inline para que WhatsApp lo reproduzca directamente.
+ */
 export async function sendClipMessage(phone, filePath) {
   const sock = getWhatsAppSock();
   if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
-  // Normalizar número (prefijo MX si son 10 dígitos)
+  // 1) Normalizar teléfono
   let num = String(phone).replace(/\D/g, '');
   if (num.length === 10) num = '52' + num;
   const jid = `${num}@s.whatsapp.net`;
 
-  // Leer buffer de M4A
-  const buffer = fs.readFileSync(filePath);
+  // 2) Leer buffer
+  const audioBuffer = fs.readFileSync(filePath);
 
-  // Enviar como audio/mp4 inline (ptt:false)
+  // 3) Obtener duración real vía ffprobe
+  const { format } = await new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, data) => {
+      if (err) reject(err);
+      else resolve(data);
+    });
+  });
+  const durationSec = Math.round(format.duration);
+
+  // 4) Enviar como audio/mp4 inline sin engañar con segundos incorrectos
   await sock.sendMessage(
     jid,
     {
-      audio: buffer,
+      audio: audioBuffer,
       mimetype: 'audio/mp4',
       fileName: path.basename(filePath),
-      ptt: false
+      ptt: false,
+      seconds: durationSec  // ahora sí coincide
     },
     { timeoutMs: 60_000, linkPreview: false }
   );
 
-  // Registrar en Firestore (opcional)
-  const q = await db.collection('leads').where('telefono','==',num).limit(1).get();
+  // 5) (Opcional) Registrar en Firestore
+  const q = await db.collection('leads')
+                  .where('telefono','==',num)
+                  .limit(1)
+                  .get();
   if (!q.empty) {
     const leadId = q.docs[0].id;
     const msgData = {
       content: '',
       mediaType: 'audio',
-      mediaUrl: '',  // podrías guardar clipUrl aquí
+      mediaUrl: '',
       sender: 'business',
       timestamp: new Date()
     };
-    await db.collection('leads').doc(leadId).collection('messages').add(msgData);
-    await db.collection('leads').doc(leadId).update({ lastMessageAt: msgData.timestamp });
+    await db.collection('leads').doc(leadId)
+            .collection('messages').add(msgData);
+    await db.collection('leads').doc(leadId)
+            .update({ lastMessageAt: msgData.timestamp });
   }
 
   return { success: true };
