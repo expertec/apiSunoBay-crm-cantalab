@@ -410,60 +410,72 @@ export async function sendAudioMessage(phone, filePath) {
 }
 
 /**
- * Envía un clip de audio MP3 como documento adjunto al lead vía Baileys.
- * @param {string} phone    — número limpio (solo dígitos, con código de país opcional).
- * @param {string} filePath — ruta al archivo .mp3 en el servidor.
+ * Envía un clip de audio AAC (.m4a) desde URL, con retry y mayor timeout,
+ * y registra el mensaje en Firestore.
+ *
+ * @param {string} phone   — número de teléfono (puede venir con o sin +52)
+ * @param {string} clipUrl — URL pública al .m4a (p. ej. Firebase Storage)
  */
-
-/**
- * Envía un clip de audio M4A inline para que WhatsApp lo reproduzca directamente.
- */
-export async function sendClipMessage(phone, filePath) {
+export async function sendClipMessage(phone, clipUrl) {
   const sock = getWhatsAppSock();
   if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
-  // 1) Normalizar teléfono
+  // 1) Normalizar teléfono y armar JID
   let num = String(phone).replace(/\D/g, '');
   if (num.length === 10) num = '52' + num;
   const jid = `${num}@s.whatsapp.net`;
 
-  // 2) Leer buffer M4A
-  const audioBuffer = fs.readFileSync(filePath);
+  // 2) Payload del mensaje
+  const messagePayload = {
+    audio: { url: clipUrl },
+    mimetype: 'audio/mp4',
+    ptt: false,
+  };
 
-  // 3) Obtener duración real sin ffmpeg (baileys no requiere seconds exacto)
-  //    WhatsApp mostrará barra de reproducción si es M4A/AAC.
-  await sock.sendMessage(
-    jid,
-    {
-      audio: audioBuffer,
-      mimetype: 'audio/mp4',
-      fileName: path.basename(filePath),
-      ptt: false,
-    },
-    {
-      timeoutMs: 60_000,
-      linkPreview: false
+  // 3) Opciones de envío: timeout de 2 minutos, sin marcar como leído
+  const sendOpts = {
+    timeoutMs: 120_000,
+    sendSeen: false,
+  };
+
+  // 4) Intentar hasta 3 veces si da timeout
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await sock.sendMessage(jid, messagePayload, sendOpts);
+      console.log(`✅ Audio enviado correctamente (intento ${attempt}) a ${jid}`);
+      break;
+    } catch (err) {
+      const isTimeout = err.message?.includes('Timed Out');
+      console.warn(`⚠️ Envío fallo en intento ${attempt}${isTimeout ? ' (Timeout)' : ''}:`, err.message);
+      if (attempt === 3 || !isTimeout) {
+        // Si no es timeout o ya fueron 3 intentos, propaga el error
+        throw err;
+      }
+      // Backoff exponencial antes de reintentar
+      await new Promise(res => setTimeout(res, 2_000 * attempt));
     }
-  );
+  }
 
-  // 4) Registrar en Firestore (opcional)
+  // 5) Registrar en Firestore
   const q = await db.collection('leads')
-                  .where('telefono','==',num)
-                  .limit(1)
-                  .get();
+                    .where('telefono', '==', num)
+                    .limit(1)
+                    .get();
   if (!q.empty) {
     const leadId = q.docs[0].id;
+    const timestamp = new Date();
     const msgData = {
       content: '',
       mediaType: 'audio',
-      mediaUrl: '',
+      mediaUrl: clipUrl,
       sender: 'business',
-      timestamp: new Date()
+      timestamp
     };
     await db.collection('leads').doc(leadId)
             .collection('messages').add(msgData);
     await db.collection('leads').doc(leadId)
-            .update({ lastMessageAt: msgData.timestamp });
+            .update({ lastMessageAt: timestamp });
   }
+
   return { success: true };
 }
