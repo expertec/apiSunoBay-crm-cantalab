@@ -411,12 +411,13 @@ export async function sendAudioMessage(phone, filePath) {
 
 
 /**
- * Envía un clip de audio MP3 descargado localmente.
- * @param {string} phone     — número limpio (solo dígitos, con código de país).
- * @param {string} filePath  — ruta al archivo .mp3 en el servidor.
+ * Envía un clip de audio MP3 (no PTT) al lead vía Baileys.
+ * @param {string} phone    — número limpio (solo dígitos, con código de país opcional).
+ * @param {string} filePath — ruta al archivo .mp3 en el servidor.
  */
 export async function sendClipMessage(phone, filePath) {
-  if (!whatsappSock) {
+  const sock = getWhatsAppSock();
+  if (!sock) {
     throw new Error('No hay conexión activa con WhatsApp');
   }
 
@@ -429,12 +430,13 @@ export async function sendClipMessage(phone, filePath) {
   const audioBuffer = fs.readFileSync(filePath);
 
   // 3) Enviar como audio MP3 (no PTT), desactivar link previews y extender timeout
-  await whatsappSock.sendMessage(
+  await sock.sendMessage(
     jid,
     {
       audio: audioBuffer,
       mimetype: 'audio/mpeg',
-      ptt: false
+      fileName: path.basename(filePath),  // importante para que WhatsApp lo reconozca
+      
     },
     {
       timeoutMs: 60_000,
@@ -454,7 +456,7 @@ export async function sendClipMessage(phone, filePath) {
     const msgData = {
       content: '',
       mediaType: 'audio',
-      mediaUrl: '',      // puedes dejar vacío o guardar una URL pública
+      mediaUrl: '',      // deja vacío o guarda la URL pública si la tienes
       sender: 'business',
       timestamp: new Date()
     };
