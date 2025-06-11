@@ -255,8 +255,12 @@ async function generarPromptParaMusica() {
   const docSnap = snap.docs[0];
   const { artist, genre, voiceType } = docSnap.data();
   const draft = `
-Crea un prompt para Suno de una canción estilo ${artist}, género ${genre}, tipo de voz ${voiceType}, 
-lista solo elementos separados por comas (máx 120 caracteres).
+  Crea un promt para decirle a suno que haga una canción estilo exitos de  ${artist} genero 
+   ${genre} con tipo de voz ${voiceType}. Sin mencionar al artista en cuestion u otras palabras
+    que puedan causar conflictos de derecho de autor, centrate en los elementos musicales como ritmo, instrumentos,
+     generos. Suno requiere que sean maximo 120 caracteres y que le pases los elementos separados por coma, 
+     mira este ejemplo ( rock pop con influencias en blues, guitarra electrica, ritmo de bateria energico)
+      genera algo similar para cancion que quiero.
   `.trim();
 
   const gptRes = await openai.createChatCompletion({
