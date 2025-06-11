@@ -403,7 +403,7 @@ async function procesarClips() {
  * Lee todos los docs de 'musica' con status 'Enviar música',
  * envía letra y clip **una sola vez**, y actualiza a 'Enviada'.
  */
-export async function enviarMusicaPorWhatsApp() {
+async function enviarMusicaPorWhatsApp() {
   const snap = await db.collection('musica')
     .where('status', '==', 'Enviar música')
     .get();
