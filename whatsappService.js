@@ -410,7 +410,7 @@ export async function sendAudioMessage(phone, filePath) {
 }
 
 /**
- * Envía un clip de audio MP3 (no PTT) al lead vía Baileys.
+ * Envía un clip de audio MP3 como documento adjunto al lead vía Baileys.
  * @param {string} phone    — número limpio (solo dígitos, con código de país opcional).
  * @param {string} filePath — ruta al archivo .mp3 en el servidor.
  */
@@ -424,17 +424,16 @@ export async function sendClipMessage(phone, filePath) {
   const jid = `${num}@s.whatsapp.net`;
 
   // 2) Leer el buffer del MP3
-  const audioBuffer = fs.readFileSync(filePath);
+  const buffer = fs.readFileSync(filePath);
 
-  // 3) Enviar como audio/mp3 (no PTT), con nombre de archivo y duración
+  // 3) Enviar como documento (audio/mp3)
   await sock.sendMessage(
     jid,
     {
-      audio: audioBuffer,
+      document: buffer,
       mimetype: 'audio/mpeg',
       fileName: path.basename(filePath),
-      ptt: false,
-      seconds: 60  // duración en segundos
+      fileLength: buffer.length
     },
     {
       timeoutMs: 60_000,
