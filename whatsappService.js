@@ -286,36 +286,33 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
   }
 }
 
-/**
- * Descarga la URL (fullUrl) y la envía como documento adjunto (.mp3).
- */
 export async function sendFullAudioAsDocument(phone, fileUrl) {
   const sock = getWhatsAppSock();
   if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
-  // Normalizar teléfono → JID
   let num = String(phone).replace(/\D/g, '');
   if (num.length === 10) num = '52' + num;
   const jid = `${num}@s.whatsapp.net`;
 
-  // Descargar el archivo completo
-  let buffer;
+  // 1) Descargar el archivo
+  let res;
   try {
-    const res = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-    buffer = Buffer.from(res.data);
+    res = await axios.get(fileUrl, { responseType: 'arraybuffer' });
   } catch (err) {
     console.error('Error descargando fullUrl:', err);
     throw new Error('No se pudo descargar el archivo completo');
   }
+  if (!res.data) {
+    throw new Error('La descarga no produjo datos');
+  }
+  const buffer = Buffer.from(res.data);
 
-  // Enviar como documento
+  // 2) Enviar como documento adjunto (payload "flat")
   try {
     await sock.sendMessage(jid, {
-      document: {
-        buffer,
-        mimetype: 'audio/mpeg',
-        fileName: 'cancion_completa.mp3'
-      },
+      document: buffer,
+      mimetype: 'audio/mpeg',
+      fileName: 'cancion_completa.mp3',
       caption: '¡Te comparto tu canción completa!'
     });
     console.log(`✅ Canción completa enviada como adjunto a ${jid}`);
