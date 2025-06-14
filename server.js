@@ -138,6 +138,58 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
   }
 });
 
+app.post('/api/whatsapp/send-full', async (req, res) => {
+  const { leadId } = req.body;
+  if (!leadId) {
+    return res.status(400).json({ error: 'Falta leadId en el body' });
+  }
+
+  try {
+    // 1) Obtén el lead y su teléfono
+    const leadSnap = await db.collection('leads').doc(leadId).get();
+    if (!leadSnap.exists) {
+      return res.status(404).json({ error: 'Lead no encontrado' });
+    }
+    const telefono = String(leadSnap.data().telefono).replace(/\D/g, '');
+
+    // 2) Busca el documento de música asociado
+    const musicSnap = await db
+      .collection('musica')
+      .where('leadPhone', '==', telefono)
+      .limit(1)
+      .get();
+    if (musicSnap.empty) {
+      return res.status(404).json({ error: 'No hay música para este lead' });
+    }
+    const musicData = musicSnap.docs[0].data();
+
+    // 3) Toma el fullUrl
+    const fullUrl = musicData.fullUrl;
+    if (!fullUrl) {
+      return res.status(400).json({ error: 'fullUrl no disponible' });
+    }
+
+    // 4) Envía la canción completa por WhatsApp
+    await sendClipMessage(telefono, fullUrl);
+
+    // 5) Actualiza status en 'musica'
+    await musicSnap.docs[0].ref.update({
+      status: 'Enviada completa',
+      sentAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // 6) Actualiza estadoProduccion en 'leads'
+    await db.collection('leads').doc(leadId).update({
+      estadoProduccion: 'Canción Enviada'
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('Error en /api/whatsapp/send-full:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 
 app.post('/api/whatsapp/send-clip', async (req, res) => {
   const { leadId } = req.body;
