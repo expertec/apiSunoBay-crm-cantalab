@@ -22,6 +22,8 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 import { sendAudioMessage } from './whatsappService.js';  // ajusta ruta si es necesario
 import { sendClipMessage } from './whatsappService.js';  // ya lo tienes exportado
+import { sendFullAudioAsDocument } from './whatsappService.js';
+
 
 
 
@@ -135,6 +137,45 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
     console.error('❌ callback Suno error:', err);
     await docRef.update({ status: 'Error música', errorMsg: err.message });
     return res.sendStatus(500);
+  }
+});
+
+/**
+ * Envía la canción completa como adjunto y marca el estado.
+ */
+app.post('/api/whatsapp/send-full', async (req, res) => {
+  const { leadId } = req.body;
+  if (!leadId) return res.status(400).json({ error: 'Falta leadId' });
+
+  try {
+    // 1) Obtener lead y teléfono
+    const leadSnap = await db.collection('leads').doc(leadId).get();
+    if (!leadSnap.exists) return res.status(404).json({ error: 'Lead no encontrado' });
+    const telefono = String(leadSnap.data().telefono).replace(/\D/g, '');
+
+    // 2) Obtener documento música
+    const musicSnap = await db
+      .collection('musica')
+      .where('leadPhone', '==', telefono)
+      .limit(1).get();
+    if (musicSnap.empty) return res.status(404).json({ error: 'No hay música para este lead' });
+    const fullUrl = musicSnap.docs[0].data().fullUrl;
+    if (!fullUrl) return res.status(400).json({ error: 'fullUrl no disponible' });
+
+    // 3) Enviar como documento adjunto
+    await sendFullAudioAsDocument(telefono, fullUrl);
+
+    // 4) Actualizar estados
+    await musicSnap.docs[0].ref.update({
+      status: 'Enviada completa',
+      sentAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('leads').doc(leadId).update({ estadoProduccion: 'Canción Enviada' });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('Error en /api/whatsapp/send-full:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
