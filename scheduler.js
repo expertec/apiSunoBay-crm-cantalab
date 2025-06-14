@@ -395,10 +395,6 @@ async function procesarClips() {
   }
 }  
 
-
-
-
-
 /**
  * Lee todos los docs de 'musica' con status 'Enviar música',
  * envía letra y clip **una sola vez**, y actualiza a 'Enviada'.

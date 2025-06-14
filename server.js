@@ -21,6 +21,9 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 
 import { sendAudioMessage } from './whatsappService.js';  // ajusta ruta si es necesario
+import { sendClipMessage } from './whatsappService.js';  // ya lo tienes exportado
+
+
 
 
 dotenv.config();
@@ -71,6 +74,8 @@ app.get('/api/whatsapp/number', (req, res) => {
     res.status(503).json({ error: 'WhatsApp no conectado' });
   }
 });
+
+
 
 app.post('/api/suno/callback', express.json(), async (req, res) => {
   const raw    = req.body;
@@ -130,6 +135,51 @@ app.post('/api/suno/callback', express.json(), async (req, res) => {
     console.error('❌ callback Suno error:', err);
     await docRef.update({ status: 'Error música', errorMsg: err.message });
     return res.sendStatus(500);
+  }
+});
+
+
+app.post('/api/whatsapp/send-clip', async (req, res) => {
+  const { leadId } = req.body;
+  if (!leadId) {
+    return res.status(400).json({ error: 'Falta leadId en el body' });
+  }
+  try {
+    // 1) Obtener teléfono del lead
+    const leadSnap = await db.collection('leads').doc(leadId).get();
+    if (!leadSnap.exists) {
+      return res.status(404).json({ error: 'Lead no encontrado' });
+    }
+    const telefono = String(leadSnap.data().telefono).replace(/\D/g, '');
+
+    // 2) Obtener clipUrl de la colección 'musica'
+    const musicSnap = await db
+      .collection('musica')
+      .where('leadPhone', '==', telefono)
+      .limit(1)
+      .get();
+
+    if (musicSnap.empty) {
+      return res.status(404).json({ error: 'No hay clip generado para este lead' });
+    }
+    const { clipUrl } = musicSnap.docs[0].data();
+    if (!clipUrl) {
+      return res.status(400).json({ error: 'Clip aún no disponible' });
+    }
+
+    // 3) Enviar el clip por WhatsApp
+    await sendClipMessage(telefono, clipUrl);
+
+    // 4) Marcar en Firestore que se envió desde el botón
+    await musicSnap.docs[0].ref.update({
+      status: 'Enviado por botón',
+      sentAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('Error enviando clip:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
