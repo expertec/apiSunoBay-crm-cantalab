@@ -14,7 +14,6 @@ import admin from 'firebase-admin';
 import { db } from './firebaseAdmin.js';
 import axios from 'axios';      
 
-import { getWhatsAppSock } from './whatsappService.js';
 let latestQR = null;
 let connectionStatus = "Desconectado";
 let whatsappSock = null;
