@@ -187,72 +187,53 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
       continue; // saltar este mensaje si falla descarga
     }
 
-    // 4) BUSCAR O CREAR EL LEAD en Firestore
-    let leadId = null;
-    const q = await db
-      .collection('leads')
-      .where('telefono', '==', phone)
-      .limit(1)
-      .get();
+    // 4) BUSCAR O CREAR EL LEAD en Firestore usando JID como ID
 
-    if (q.empty) {
-      // 4.1) Si NO existe, leemos configuración para defaultTrigger
-      const cfgSnap = await db.collection('config').doc('appConfig').get();
-      const cfg = cfgSnap.exists ? cfgSnap.data() : {};
+const leadRef = db.collection('leads').doc(jid);
+const docSnap = await leadRef.get();
 
-      // 4.2) Detectamos si el mensaje incluye "#webPro1490"
-      let trigger;
-      if (content.includes('#webPro1490')) {
-        trigger = 'LeadWeb1490';
-      } else {
-        trigger = cfg.defaultTrigger || 'NuevoLead';
+// Leemos configuración para defaultTrigger (solo una vez)
+const cfgSnap = await db.collection('config').doc('appConfig').get();
+const cfg = cfgSnap.exists ? cfgSnap.data() : {};
+
+// Detectamos si el mensaje incluye "#webPro1490"
+let trigger;
+if (content.includes('#webPro1490')) {
+  trigger = 'LeadWeb1490';
+} else {
+  trigger = cfg.defaultTrigger || 'NuevoLead';
+}
+const nowIso = new Date().toISOString();
+
+if (!docSnap.exists) {
+  // Si NO existe, creamos el lead nuevo con el JID como ID
+  await leadRef.set({
+    telefono: phone,
+    nombre: msg.pushName || '',
+    source: 'WhatsApp',
+    fecha_creacion: new Date(),
+    estado: 'nuevo',
+    etiquetas: [trigger],
+    secuenciasActivas: [
+      {
+        trigger,
+        startTime: nowIso,
+        index: 0
       }
-      const nowIso = new Date().toISOString();
+    ],
+    unreadCount: 0,
+    lastMessageAt: new Date()
+  });
+} else {
+  // Si YA existe, actualizamos etiquetas, etc.
+  await leadRef.update({
+    etiquetas: admin.firestore.FieldValue.arrayUnion(trigger),
+    lastMessageAt: new Date()
+  });
+}
 
-      // 4.3) Creamos el lead nuevo con la etiqueta según trigger
-      const newLeadRef = await db.collection('leads').add({
-        telefono: phone,
-        nombre: msg.pushName || '',
-        source: 'WhatsApp',
-        fecha_creacion: new Date(),
-        estado: 'nuevo',
-        etiquetas: [trigger],
-        secuenciasActivas: [
-          {
-            trigger,
-            startTime: nowIso,
-            index: 0
-          }
-        ],
-        unreadCount: 0,
-        lastMessageAt: new Date()
-      });
-      leadId = newLeadRef.id;
-    } else {
-      // 4.4) Si YA existe, obtenemos su ID y actualizamos etiquetas
-      leadId = q.docs[0].id;
+const leadId = jid;
 
-      // Leer de nuevo la configuración por si cambió en Firestore
-      const cfgSnap2 = await db.collection('config').doc('appConfig').get();
-      const cfg2 = cfgSnap2.exists ? cfgSnap2.data() : {};
-
-      // 4.5) Volvemos a calcular el trigger en base a "#webPro1490"
-      let trigger;
-      if (content.includes('#webPro1490')) {
-        trigger = 'LeadWeb1490';
-      } else {
-        trigger = cfg2.defaultTrigger || 'NuevoLead';
-      }
-
-      // 4.6) Actualizamos array de etiquetas sin duplicados
-      await db
-        .collection('leads')
-        .doc(leadId)
-        .update({
-          etiquetas: admin.firestore.FieldValue.arrayUnion(trigger),
-          lastMessageAt: new Date()
-        });
-    }
 
     // 5) GUARDAR el mensaje dentro de /leads/{leadId}/messages
     const msgData = {
