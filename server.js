@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
 import axios from 'axios';
 import os from 'os';               // ← Asegúrate de importar
 
@@ -16,8 +17,26 @@ import { db, admin } from './firebaseAdmin.js';
 const bucket = admin.storage().bucket();
 
 
-// Dile a fluent-ffmpeg dónde está el binario
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+// Dile a fluent-ffmpeg dónde está el binario (Render no instala los opcionales automáticamente)
+const ffmpegCandidates = [
+  process.env.FFMPEG_PATH,
+  ffmpegInstaller?.path,
+  ffmpegStatic
+].filter(Boolean);
+
+const resolvedFfmpeg = ffmpegCandidates.find(candidate => {
+  try {
+    return candidate && fs.existsSync(candidate);
+  } catch {
+    return false;
+  }
+});
+
+if (resolvedFfmpeg) {
+  ffmpeg.setFfmpegPath(resolvedFfmpeg);
+} else {
+  console.warn('⚠️ No se encontró un binario de ffmpeg. Define FFMPEG_PATH o instala ffmpeg en el sistema.');
+}
 
 
 import { sendAudioMessage } from './whatsappService.js';  // ajusta ruta si es necesario
