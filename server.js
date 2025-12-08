@@ -8,7 +8,6 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
 import { spawnSync } from 'child_process';
 import axios from 'axios';
@@ -21,7 +20,9 @@ const bucket = admin.storage().bucket();
 // Dile a fluent-ffmpeg dónde está el binario (Render no instala los opcionales automáticamente)
 let installerPath;
 try {
-  installerPath = ffmpegInstaller?.path;
+  const installerModule = await import('@ffmpeg-installer/ffmpeg');
+  const installer = installerModule?.default ?? installerModule;
+  installerPath = installer?.path;
 } catch (err) {
   console.warn('⚠️ @ffmpeg-installer no aporta binario para esta plataforma:', err.message);
 }
