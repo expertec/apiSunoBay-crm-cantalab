@@ -13,6 +13,7 @@ import path from 'path';
 import admin from 'firebase-admin';
 import { db } from './firebaseAdmin.js';
 import axios from 'axios';      
+import { syncLeadNextSequence } from './sequenceUtils.js';
 
 let latestQR = null;
 let connectionStatus = "Desconectado";
@@ -206,6 +207,13 @@ if (content.includes('#webPro1490')) {
 const nowIso = new Date().toISOString();
 
 if (!docSnap.exists) {
+  const secuenciasActivas = [
+    {
+      trigger,
+      startTime: nowIso,
+      index: 0
+    }
+  ];
   // Si NO existe, creamos el lead nuevo con el JID como ID
   await leadRef.set({
     telefono: phone,
@@ -214,16 +222,11 @@ if (!docSnap.exists) {
     fecha_creacion: new Date(),
     estado: 'nuevo',
     etiquetas: [trigger],
-    secuenciasActivas: [
-      {
-        trigger,
-        startTime: nowIso,
-        index: 0
-      }
-    ],
+    secuenciasActivas,
     unreadCount: 0,
     lastMessageAt: new Date()
   });
+  await syncLeadNextSequence(jid, secuenciasActivas);
 } else {
   // Si YA existe, actualizamos etiquetas, etc.
   await leadRef.update({

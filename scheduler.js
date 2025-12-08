@@ -12,9 +12,11 @@ import ffmpeg from 'fluent-ffmpeg';
 // al inicio de src/server/scheduler.js (o donde esté tu enviarMusicaPorWhatsApp)
 import { sendMessageToLead, sendAudioMessage } from './whatsappService.js';
 import { sendClipMessage } from './whatsappService.js';
-
-
-
+import {
+  getSequenceDefinition,
+  calculateLeadNextRun,
+  syncLeadNextSequence
+} from './sequenceUtils.js';
 
 const bucket = admin.storage().bucket();
 
@@ -139,25 +141,61 @@ async function enviarMensaje(lead, mensaje) {
  */
 async function processSequences() {
   try {
-    const leadsSnap = await db
+    const now = new Date();
+    const BATCH_SIZE = 100;
+    let leadsSnap = await db
       .collection('leads')
-      .where('secuenciasActivas', '!=', null)
+      .where('nextSequenceAt', '<=', now)
+      .orderBy('nextSequenceAt')
+      .limit(BATCH_SIZE)
       .get();
+
+    if (leadsSnap.empty) {
+      const backlogSnap = await db
+        .collection('leads')
+        .where('secuenciasActivas', '!=', null)
+        .limit(25)
+        .get();
+
+      const needsInit = backlogSnap.docs.filter(doc => !doc.data().nextSequenceAt);
+      for (const doc of needsInit) {
+        const sequences = doc.data().secuenciasActivas || [];
+        const nextRun = await calculateLeadNextRun(sequences);
+        if (nextRun) {
+          await doc.ref.update({ nextSequenceAt: nextRun });
+        }
+      }
+
+      if (needsInit.length) {
+        leadsSnap = await db
+          .collection('leads')
+          .where('nextSequenceAt', '<=', now)
+          .orderBy('nextSequenceAt')
+          .limit(BATCH_SIZE)
+          .get();
+      }
+    }
 
     for (const doc of leadsSnap.docs) {
       const lead = { id: doc.id, ...doc.data() };
-      if (!Array.isArray(lead.secuenciasActivas) || !lead.secuenciasActivas.length) continue;
+      if (!Array.isArray(lead.secuenciasActivas) || !lead.secuenciasActivas.length) {
+        await db.collection('leads').doc(lead.id).update({
+          secuenciasActivas: [],
+          nextSequenceAt: FieldValue.delete()
+        });
+        continue;
+      }
 
       let dirty = false;
       for (const seq of lead.secuenciasActivas) {
         const { trigger, startTime, index } = seq;
-        const seqSnap = await db
-          .collection('secuencias')
-          .where('trigger', '==', trigger)
-          .get();
-        if (seqSnap.empty) continue;
-
-        const msgs = seqSnap.docs[0].data().messages;
+        const seqDef = await getSequenceDefinition(trigger);
+        const msgs = seqDef?.messages || [];
+        if (!msgs.length) {
+          seq.completed = true;
+          dirty = true;
+          continue;
+        }
         if (index >= msgs.length) {
           seq.completed = true;
           dirty = true;
@@ -182,11 +220,21 @@ async function processSequences() {
 
         seq.index++;
         dirty = true;
+        if (seq.index >= msgs.length) {
+          seq.completed = true;
+        }
       }
 
       if (dirty) {
         const rem = lead.secuenciasActivas.filter(s => !s.completed);
-        await db.collection('leads').doc(lead.id).update({ secuenciasActivas: rem });
+        const nextRun = await calculateLeadNextRun(rem);
+        const updatePayload = { secuenciasActivas: rem };
+        if (rem.length && nextRun) {
+          updatePayload.nextSequenceAt = nextRun;
+        } else {
+          updatePayload.nextSequenceAt = FieldValue.delete();
+        }
+        await db.collection('leads').doc(lead.id).update(updatePayload);
       }
     }
   } catch (err) {
@@ -446,6 +494,7 @@ async function enviarMusicaPorWhatsApp() {
           index: 0
         })
       });
+      await syncLeadNextSequence(leadId);
 
       console.log(`✅ Música enviada a ${leadPhone} (doc ${doc.id})`);
     } catch (err) {
@@ -489,5 +538,3 @@ export {
   enviarMusicaPorWhatsApp,
   retryStuckMusic
 };
-
-
