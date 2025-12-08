@@ -10,6 +10,7 @@ import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
+import { spawnSync } from 'child_process';
 import axios from 'axios';
 import os from 'os';               // ← Asegúrate de importar
 
@@ -18,10 +19,28 @@ const bucket = admin.storage().bucket();
 
 
 // Dile a fluent-ffmpeg dónde está el binario (Render no instala los opcionales automáticamente)
+let installerPath;
+try {
+  installerPath = ffmpegInstaller?.path;
+} catch (err) {
+  console.warn('⚠️ @ffmpeg-installer no aporta binario para esta plataforma:', err.message);
+}
+
+let systemFfmpeg;
+try {
+  const which = spawnSync('which', ['ffmpeg']);
+  if (which.status === 0) {
+    systemFfmpeg = which.stdout.toString().trim();
+  }
+} catch {
+  // ignore
+}
+
 const ffmpegCandidates = [
   process.env.FFMPEG_PATH,
-  ffmpegInstaller?.path,
-  ffmpegStatic
+  installerPath,
+  ffmpegStatic,
+  systemFfmpeg
 ].filter(Boolean);
 
 const resolvedFfmpeg = ffmpegCandidates.find(candidate => {
