@@ -197,14 +197,18 @@ const docSnap = await leadRef.get();
 const cfgSnap = await db.collection('config').doc('appConfig').get();
 const cfg = cfgSnap.exists ? cfgSnap.data() : {};
 
+const normalizedContent = (content || '').toLowerCase();
+const isLinkCommand = normalizedContent.includes('#link');
+
 // Detectamos si el mensaje incluye "#webPro1490"
 let trigger;
-if (content.includes('#webPro1490')) {
+if (normalizedContent.includes('#webpro1490')) {
   trigger = 'LeadWeb1490';
 } else {
   trigger = cfg.defaultTrigger || 'NuevoLead';
 }
 const nowIso = new Date().toISOString();
+let sequencesToPersist = null;
 
 if (!docSnap.exists) {
   const secuenciasActivas = [
@@ -227,12 +231,27 @@ if (!docSnap.exists) {
     lastMessageAt: new Date()
   });
   await syncLeadNextSequence(jid, secuenciasActivas);
-} else {
-  // Si YA existe, actualizamos etiquetas, etc.
-  await leadRef.update({
-    etiquetas: admin.firestore.FieldValue.arrayUnion(trigger),
-    lastMessageAt: new Date()
-  });
+} else if (sender === 'lead' || isLinkCommand) {
+  const leadData = docSnap.data() || {};
+  let existingSequences = Array.isArray(leadData.secuenciasActivas)
+    ? leadData.secuenciasActivas.filter(Boolean)
+    : [];
+  if (isLinkCommand) {
+    existingSequences = existingSequences.filter(seq => seq?.trigger !== trigger);
+  }
+  const alreadyActive = existingSequences.some(
+    seq => seq?.trigger === trigger && !seq?.completed
+  );
+  if (!alreadyActive || isLinkCommand) {
+    sequencesToPersist = [
+      ...existingSequences,
+      {
+        trigger,
+        startTime: nowIso,
+        index: 0
+      }
+    ];
+  }
 }
 
 const leadId = jid;
@@ -253,11 +272,20 @@ const leadId = jid;
       .add(msgData);
 
     // 6) ACTUALIZAR el lead: incrementar unreadCount si envió el lead
-    const updateData = { lastMessageAt: msgData.timestamp };
+    const updateData = {
+      etiquetas: FieldValue.arrayUnion(trigger),
+      lastMessageAt: msgData.timestamp
+    };
     if (sender === 'lead') {
-      updateData.unreadCount = admin.firestore.FieldValue.increment(1);
+      updateData.unreadCount = FieldValue.increment(1);
     }
-    await db.collection('leads').doc(leadId).update(updateData);
+    if (sequencesToPersist) {
+      updateData.secuenciasActivas = sequencesToPersist;
+    }
+    await leadRef.update(updateData);
+    if (sequencesToPersist) {
+      await syncLeadNextSequence(leadId, sequencesToPersist);
+    }
   }
 });
 
