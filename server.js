@@ -8,60 +8,15 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
-import { spawnSync } from 'child_process';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import axios from 'axios';
 import os from 'os';
 
 import { db, admin } from './firebaseAdmin.js';
 const bucket = admin.storage().bucket();
 
-<<<<<<< HEAD
-
-// Dile a fluent-ffmpeg dónde está el binario (Render no instala los opcionales automáticamente)
-let installerPath;
-try {
-  const installerModule = await import('@ffmpeg-installer/ffmpeg');
-  const installer = installerModule?.default ?? installerModule;
-  installerPath = installer?.path;
-} catch (err) {
-  console.warn('⚠️ @ffmpeg-installer no aporta binario para esta plataforma:', err.message);
-}
-
-let systemFfmpeg;
-try {
-  const which = spawnSync('which', ['ffmpeg']);
-  if (which.status === 0) {
-    systemFfmpeg = which.stdout.toString().trim();
-  }
-} catch {
-  // ignore
-}
-
-const ffmpegCandidates = [
-  process.env.FFMPEG_PATH,
-  installerPath,
-  ffmpegStatic,
-  systemFfmpeg
-].filter(Boolean);
-
-const resolvedFfmpeg = ffmpegCandidates.find(candidate => {
-  try {
-    return candidate && fs.existsSync(candidate);
-  } catch {
-    return false;
-  }
-});
-
-if (resolvedFfmpeg) {
-  ffmpeg.setFfmpegPath(resolvedFfmpeg);
-} else {
-  console.warn('⚠️ No se encontró un binario de ffmpeg. Define FFMPEG_PATH o instala ffmpeg en el sistema.');
-}
-=======
 // Dile a fluent-ffmpeg dónde está el binario
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
->>>>>>> 7222a2f (cambios en generacion de qr)
 
 import { sendAudioMessage } from './whatsappService.js';
 import { sendClipMessage } from './whatsappService.js';
@@ -436,15 +391,6 @@ cron.schedule('*/3 * * * *', () => {
   generarPromptParaMusica().catch(err => console.error('❌ Error en generarPromptParaMusica:', err));
 });
 
-<<<<<<< HEAD
-// Música
-cron.schedule('*/1 * * * *', generarLetraParaMusica);
-cron.schedule('*/1 * * * *', generarPromptParaMusica);
-cron.schedule('*/2 * * * *', generarMusicaConSuno);
-cron.schedule('*/2 * * * *', procesarClips);
-cron.schedule('*/1 * * * *', enviarMusicaPorWhatsApp);
-cron.schedule('*/5 * * * *', () => retryStuckMusic(10));
-=======
 cron.schedule('*/5 * * * *', () => {
   console.log('🎵 generarMusicaConSuno:', new Date().toISOString());
   generarMusicaConSuno().catch(err => console.error('❌ Error en generarMusicaConSuno:', err));
@@ -471,4 +417,3 @@ cron.schedule('*/10 * * * *', () => {
 });
 
 console.log('✅ Todos los cron jobs iniciados correctamente');
->>>>>>> 7222a2f (cambios en generacion de qr)

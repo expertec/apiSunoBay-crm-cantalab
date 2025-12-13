@@ -10,18 +10,7 @@ import os from 'os';
 import path from 'path';
 import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
-<<<<<<< HEAD
-// al inicio de src/server/scheduler.js (o donde esté tu enviarMusicaPorWhatsApp)
-import { sendMessageToLead, sendAudioMessage } from './whatsappService.js';
-import { sendClipMessage } from './whatsappService.js';
-import {
-  getSequenceDefinition,
-  calculateLeadNextRun,
-  syncLeadNextSequence
-} from './sequenceUtils.js';
-=======
 import { sendMessageToLead, sendClipMessage } from './whatsappService.js';
->>>>>>> 7222a2f (cambios en generacion de qr)
 
 // 🔧 CRÍTICO: Definir constantes faltantes
 const bucket = admin.storage().bucket();
@@ -201,52 +190,6 @@ async function getConfigFromCache() {
  */
 async function processSequences() {
   try {
-<<<<<<< HEAD
-    const now = new Date();
-    const BATCH_SIZE = 100;
-    let leadsSnap = await db
-      .collection('leads')
-      .where('nextSequenceAt', '<=', now)
-      .orderBy('nextSequenceAt')
-      .limit(BATCH_SIZE)
-      .get();
-
-    if (leadsSnap.empty) {
-      const backlogSnap = await db
-        .collection('leads')
-        .where('secuenciasActivas', '!=', null)
-        .limit(25)
-        .get();
-
-      const needsInit = backlogSnap.docs.filter(doc => !doc.data().nextSequenceAt);
-      for (const doc of needsInit) {
-        const sequences = doc.data().secuenciasActivas || [];
-        const nextRun = await calculateLeadNextRun(sequences);
-        if (nextRun) {
-          await doc.ref.update({ nextSequenceAt: nextRun });
-        }
-      }
-
-      if (needsInit.length) {
-        leadsSnap = await db
-          .collection('leads')
-          .where('nextSequenceAt', '<=', now)
-          .orderBy('nextSequenceAt')
-          .limit(BATCH_SIZE)
-          .get();
-      }
-    }
-
-    for (const doc of leadsSnap.docs) {
-      const lead = { id: doc.id, ...doc.data() };
-      if (!Array.isArray(lead.secuenciasActivas) || !lead.secuenciasActivas.length) {
-        await db.collection('leads').doc(lead.id).update({
-          secuenciasActivas: [],
-          nextSequenceAt: FieldValue.delete()
-        });
-        continue;
-      }
-=======
     console.log('🔍 Iniciando processSequences optimizado...');
     
     const leadsSnap = await db
@@ -276,19 +219,9 @@ async function processSequences() {
 
       let needsUpdate = false;
       const updatedSequences = [];
->>>>>>> 7222a2f (cambios en generacion de qr)
 
       for (const seq of lead.secuenciasActivas) {
         const { trigger, startTime, index } = seq;
-<<<<<<< HEAD
-        const seqDef = await getSequenceDefinition(trigger);
-        const msgs = seqDef?.messages || [];
-        if (!msgs.length) {
-          seq.completed = true;
-          dirty = true;
-          continue;
-        }
-=======
         
         const sequenceData = await getSequenceFromCache(trigger);
         if (!sequenceData) {
@@ -297,7 +230,6 @@ async function processSequences() {
         }
 
         const msgs = sequenceData.messages;
->>>>>>> 7222a2f (cambios en generacion de qr)
         if (index >= msgs.length) {
           needsUpdate = true;
           continue;
@@ -326,25 +258,6 @@ async function processSequences() {
           needsUpdate = true;
         }
 
-<<<<<<< HEAD
-        seq.index++;
-        dirty = true;
-        if (seq.index >= msgs.length) {
-          seq.completed = true;
-        }
-      }
-
-      if (dirty) {
-        const rem = lead.secuenciasActivas.filter(s => !s.completed);
-        const nextRun = await calculateLeadNextRun(rem);
-        const updatePayload = { secuenciasActivas: rem };
-        if (rem.length && nextRun) {
-          updatePayload.nextSequenceAt = nextRun;
-        } else {
-          updatePayload.nextSequenceAt = FieldValue.delete();
-        }
-        await db.collection('leads').doc(lead.id).update(updatePayload);
-=======
         updatedSequences.push(seq);
       }
 
@@ -355,7 +268,6 @@ async function processSequences() {
           lastProcessedAt: FieldValue.serverTimestamp()
         });
         batchCount++;
->>>>>>> 7222a2f (cambios en generacion de qr)
       }
     }
 
@@ -770,7 +682,6 @@ async function enviarMusicaPorWhatsApp() {
         }),
         estadoProduccion: 'Canción Enviada'
       });
-      await syncLeadNextSequence(leadId);
 
       await batch.commit();
       console.log(`✅ Música enviada a ${leadPhone}`);
@@ -849,8 +760,4 @@ export {
   enviarMusicaPorWhatsApp,
   limpiarDocumentosStuck,
   retryStuckMusic
-<<<<<<< HEAD
 };
-=======
-};
->>>>>>> 7222a2f (cambios en generacion de qr)
