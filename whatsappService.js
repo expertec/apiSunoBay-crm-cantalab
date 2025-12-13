@@ -4,7 +4,9 @@ import {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  downloadMediaMessage
+  downloadMediaMessage,
+  jidNormalizedUser,
+  isJidGroup
 } from 'baileys'; // Sin @whiskeysockets/
 import QRCode from 'qrcode-terminal';
 import Pino from 'pino';
@@ -76,16 +78,17 @@ export async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Dentro de whatsappService.js, ubica tu sección donde tienes:
+// Dentro de whatsappService.js, ubica tu sección donde tienes:
 // sock.ev.on('messages.upsert', async ({ messages, type }) => { … });
 
 sock.ev.on('messages.upsert', async ({ messages, type }) => {
-  if (type !== 'notify') return;
+  const allowedTypes = new Set(['notify', 'append', 'replace']);
+  if (!allowedTypes.has(type)) return;
 
   for (const msg of messages) {
-    if (!msg.key) continue;
-    const jid = msg.key.remoteJid;
-    if (!jid || jid.endsWith('@g.us')) continue; // ignorar grupos
+    if (!msg.key?.remoteJid) continue;
+    const jid = jidNormalizedUser(msg.key.remoteJid);
+    if (!jid || isJidGroup(jid)) continue; // ignorar grupos
 
     // 1) Determinar número de teléfono y quién envía
     const phone = jid.split('@')[0];
