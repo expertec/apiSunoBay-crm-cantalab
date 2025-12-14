@@ -9,14 +9,43 @@ import path from 'path';
 import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
+import { spawnSync } from 'child_process';
 import axios from 'axios';
 import os from 'os';
 
 import { db, admin } from './firebaseAdmin.js';
 const bucket = admin.storage().bucket();
 
-// Dile a fluent-ffmpeg dónde está el binario
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+// Resolución flexible de ffmpeg en Render/local
+const candidatePaths = [];
+if (process.env.FFMPEG_PATH) candidatePaths.push(process.env.FFMPEG_PATH);
+if (ffmpegInstaller?.path) candidatePaths.push(ffmpegInstaller.path);
+if (ffmpegStatic) candidatePaths.push(ffmpegStatic);
+
+try {
+  const which = spawnSync('which', ['ffmpeg'], { encoding: 'utf-8' });
+  if (which.status === 0 && which.stdout.trim()) {
+    candidatePaths.push(which.stdout.trim());
+  }
+} catch {
+  // ignore lookup errors
+}
+
+const resolvedFfmpegPath = candidatePaths.find(p => {
+  try {
+    return p && fs.existsSync(p);
+  } catch {
+    return false;
+  }
+});
+
+if (resolvedFfmpegPath) {
+  ffmpeg.setFfmpegPath(resolvedFfmpegPath);
+  console.log(`[ffmpeg] usando binario en ${resolvedFfmpegPath}`);
+} else {
+  console.warn('⚠️ No se encontró ffmpeg. Define FFMPEG_PATH o instala ffmpeg en el sistema.');
+}
 
 import { sendAudioMessage } from './whatsappService.js';
 import { sendClipMessage } from './whatsappService.js';
