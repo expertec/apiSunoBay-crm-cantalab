@@ -373,7 +373,7 @@ app.get('/api/system/status', async (req, res) => {
 
     const leadsWithSequences = await db
       .collection('leads')
-      .where('secuenciasActivas', '!=', null)
+      .where('hasActiveSequences', '==', true)
       .get();
 
     res.json({

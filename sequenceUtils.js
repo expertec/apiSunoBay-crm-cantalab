@@ -66,10 +66,13 @@ export async function syncLeadNextSequence(leadId, overrideSequences) {
     sequences = [];
   }
 
-  const nextRun = await calculateLeadNextRun(sequences);
-  const update = {};
+  const hasSequences = sequences.length > 0;
+  const nextRun = hasSequences ? await calculateLeadNextRun(sequences) : null;
+  const update = {
+    hasActiveSequences: hasSequences
+  };
 
-  if (nextRun) {
+  if (hasSequences && nextRun) {
     update.nextSequenceAt = nextRun;
   } else {
     update.nextSequenceAt = FieldValue.delete();

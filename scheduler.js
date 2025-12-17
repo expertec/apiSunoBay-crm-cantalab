@@ -11,6 +11,7 @@ import path from 'path';
 import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
 import { sendMessageToLead, sendClipMessage } from './whatsappService.js';
+import { calculateLeadNextRun, syncLeadNextSequence } from './sequenceUtils.js';
 
 // 🔧 CRÍTICO: Definir constantes faltantes
 const bucket = admin.storage().bucket();
@@ -192,25 +193,54 @@ async function processSequences() {
   try {
     console.log('🔍 Iniciando processSequences optimizado...');
     
-    const leadsSnap = await db
+    const primarySnap = await db
       .collection('leads')
-      .where('secuenciasActivas', '!=', null)
-      .where('estado', '!=', 'completado')
+      .where('hasActiveSequences', '==', true)
       .limit(50)
       .get();
 
-    if (leadsSnap.empty) {
+    const candidateDocs = [...primarySnap.docs];
+
+    if (candidateDocs.length < 50) {
+      const seen = new Set(candidateDocs.map(doc => doc.id));
+      const legacySnap = await db
+        .collection('leads')
+        .where('hasActiveSequences', '==', null)
+        .limit(50)
+        .get();
+
+      for (const doc of legacySnap.docs) {
+        if (candidateDocs.length >= 50) break;
+        if (seen.has(doc.id)) continue;
+        const data = doc.data();
+        if (Array.isArray(data.secuenciasActivas) && data.secuenciasActivas.length) {
+          candidateDocs.push(doc);
+        }
+      }
+    }
+
+    if (!candidateDocs.length) {
       console.log('✅ No hay leads con secuencias activas');
       return;
     }
 
-    console.log(`📊 Procesando ${leadsSnap.docs.length} leads`);
+    const activeLeads = candidateDocs.filter(doc => {
+      const estado = (doc.data()?.estado || '').toLowerCase();
+      return estado !== 'completado';
+    });
+
+    if (!activeLeads.length) {
+      console.log('✅ Leads con secuencias pendientes, pero todos completados');
+      return;
+    }
+
+    console.log(`📊 Procesando ${activeLeads.length} leads`);
     
     const batch = db.batch();
     let batchCount = 0;
     const MAX_BATCH_SIZE = 10;
 
-    for (const doc of leadsSnap.docs) {
+    for (const doc of activeLeads) {
       const lead = { id: doc.id, ...doc.data() };
       
       if (!Array.isArray(lead.secuenciasActivas) || !lead.secuenciasActivas.length) {
@@ -263,10 +293,25 @@ async function processSequences() {
 
       if (needsUpdate && batchCount < MAX_BATCH_SIZE) {
         const leadRef = db.collection('leads').doc(lead.id);
-        batch.update(leadRef, { 
+        const hasSequences = updatedSequences.length > 0;
+        const updateData = {
           secuenciasActivas: updatedSequences,
-          lastProcessedAt: FieldValue.serverTimestamp()
-        });
+          lastProcessedAt: FieldValue.serverTimestamp(),
+          hasActiveSequences: hasSequences
+        };
+
+        if (hasSequences) {
+          const nextRun = await calculateLeadNextRun(updatedSequences);
+          if (nextRun) {
+            updateData.nextSequenceAt = nextRun;
+          } else {
+            updateData.nextSequenceAt = FieldValue.delete();
+          }
+        } else {
+          updateData.nextSequenceAt = FieldValue.delete();
+        }
+
+        batch.update(leadRef, updateData);
         batchCount++;
       }
     }
@@ -684,6 +729,7 @@ async function enviarMusicaPorWhatsApp() {
       });
 
       await batch.commit();
+      await syncLeadNextSequence(leadId);
       console.log(`✅ Música enviada a ${leadPhone}`);
       
     } catch (err) {
