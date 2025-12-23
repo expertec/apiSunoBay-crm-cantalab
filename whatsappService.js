@@ -25,6 +25,72 @@ let sessionPhone = null; // almacenará el número de la sesión activa
 const localAuthFolder = '/var/data';
 const { FieldValue } = admin.firestore;
 const bucket = admin.storage().bucket();
+const DEFAULT_COUNTRY_CODE = '52';
+
+// Normaliza un JID o un número y devuelve solo dígitos
+function phoneFromJid(jid) {
+  if (!jid) return null;
+  const local = String(jid).split('@')[0] || '';
+  const digits = local.replace(/\D/g, '');
+  return digits || null;
+}
+
+// Convierte un número (con o sin prefijo) a JID de WhatsApp
+function numberToJid(num) {
+  if (!num) return null;
+  let digits = String(num).replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.length === 10) digits = DEFAULT_COUNTRY_CODE + digits;
+  return `${digits}@s.whatsapp.net`;
+}
+
+// Obtiene el mejor JID disponible desde la entidad del lead
+export function extractJidFromLead(lead) {
+  if (!lead) return null;
+  const candidate =
+    lead.resolvedJid ||
+    lead.jid ||
+    lead.id ||
+    lead.leadId;
+  if (candidate) return jidNormalizedUser(candidate);
+
+  const digits = phoneFromJid(lead.telefono || lead.phone || '');
+  const fallback = numberToJid(digits);
+  return fallback ? jidNormalizedUser(fallback) : null;
+}
+
+function resolveTargetJid(target) {
+  if (!target) return null;
+  if (typeof target === 'string') {
+    if (target.includes('@')) return jidNormalizedUser(target);
+    const byNumber = numberToJid(target);
+    return byNumber ? jidNormalizedUser(byNumber) : null;
+  }
+  if (typeof target === 'object') {
+    const fromLead = extractJidFromLead(target);
+    if (fromLead) return fromLead;
+    return resolveTargetJid(target.telefono || target.phone || '');
+  }
+  return null;
+}
+
+async function findLeadRef(jid) {
+  if (!jid) return null;
+  const normalized = jidNormalizedUser(jid);
+  const docSnap = await db.collection('leads').doc(normalized).get();
+  if (docSnap.exists) return docSnap.ref;
+
+  const digits = phoneFromJid(normalized);
+  if (digits) {
+    const q = await db
+      .collection('leads')
+      .where('telefono', '==', digits)
+      .limit(1)
+      .get();
+    if (!q.empty) return q.docs[0].ref;
+  }
+  return null;
+}
 
 export async function connectToWhatsApp() {
   try {
@@ -85,13 +151,29 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
   if (!allowedTypes.has(type)) return;
 
   for (const msg of messages) {
-    if (!msg.key?.remoteJid) continue;
-    const jid = jidNormalizedUser(msg.key.remoteJid);
-    if (!jid || isJidGroup(jid)) continue; // ignorar grupos
+    const rawRemoteJid = msg?.key?.remoteJid;
+    const remoteJidAlt = msg?.key?.remoteJidAlt;
+    const addressingMode = msg?.key?.addressingMode || 'pn';
+    const preferredJid = remoteJidAlt || rawRemoteJid;
+    if (!preferredJid) continue;
+
+    const normalizedPreferred = jidNormalizedUser(preferredJid);
+    const normalizedRemote = rawRemoteJid ? jidNormalizedUser(rawRemoteJid) : normalizedPreferred;
+    const resolvedJid = remoteJidAlt ? jidNormalizedUser(remoteJidAlt) : null;
+
+    if (!normalizedPreferred || isJidGroup(normalizedPreferred)) continue; // ignorar grupos
+
+    const isLidRemote = addressingMode === 'lid' || normalizedPreferred.endsWith('@lid');
+    const jid = normalizedRemote || normalizedPreferred;
 
     // 1) Determinar número de teléfono y quién envía
-    const phone = jid.split('@')[0];
+    const phone = phoneFromJid(resolvedJid || normalizedPreferred);
+    const phoneForFiles = phone || 'unknown';
     const sender = msg.key.fromMe ? 'business' : 'lead';
+
+    if (remoteJidAlt) {
+      console.log('[WA] ✅ Usando remoteJidAlt (número real):', remoteJidAlt);
+    }
 
     // 2) Inicializar variables para contenido y tipo de media
     let content = '';
@@ -109,7 +191,7 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
           {},
           { logger: Pino() }
         );
-        const fileName = `videos/${phone}-${Date.now()}.mp4`;
+        const fileName = `videos/${phoneForFiles}-${Date.now()}.mp4`;
         const fileRef = admin.storage().bucket().file(fileName);
         await fileRef.save(buffer, { contentType: 'video/mp4' });
         const [url] = await fileRef.getSignedUrl({
@@ -127,7 +209,7 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
           {},
           { logger: Pino() }
         );
-        const fileName = `images/${phone}-${Date.now()}.jpg`;
+        const fileName = `images/${phoneForFiles}-${Date.now()}.jpg`;
         const fileRef = admin.storage().bucket().file(fileName);
         await fileRef.save(buffer, { contentType: 'image/jpeg' });
         const [url] = await fileRef.getSignedUrl({
@@ -145,7 +227,7 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
           {},
           { logger: Pino() }
         );
-        const fileName = `audios/${phone}-${Date.now()}.ogg`;
+        const fileName = `audios/${phoneForFiles}-${Date.now()}.ogg`;
         const fileRef = admin.storage().bucket().file(fileName);
         await fileRef.save(buffer, { contentType: 'audio/ogg' });
         const [url] = await fileRef.getSignedUrl({
@@ -165,7 +247,7 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
           { logger: Pino() }
         );
         const ext = path.extname(origName) || '';
-        const fileName = `docs/${phone}-${Date.now()}${ext}`;
+        const fileName = `docs/${phoneForFiles}-${Date.now()}${ext}`;
         const fileRef = admin.storage().bucket().file(fileName);
         await fileRef.save(buffer, { contentType: mimetype });
         const [url] = await fileRef.getSignedUrl({
@@ -194,6 +276,17 @@ sock.ev.on('messages.upsert', async ({ messages, type }) => {
 
 const leadRef = db.collection('leads').doc(jid);
 const docSnap = await leadRef.get();
+const leadData = docSnap.data() || {};
+
+const leadIdentity = {
+  telefono: phone || '',
+  jid,
+  resolvedJid: resolvedJid || null,
+  lidJid: isLidRemote ? jid : null,
+  addressingMode,
+  isLidRemote,
+  lastAddressingMode: addressingMode
+};
 
 // Leemos configuración para defaultTrigger (solo una vez)
 const cfgSnap = await db.collection('config').doc('appConfig').get();
@@ -222,7 +315,7 @@ if (!docSnap.exists) {
   ];
   // Si NO existe, creamos el lead nuevo con el JID como ID
   await leadRef.set({
-    telefono: phone,
+    ...leadIdentity,
     nombre: msg.pushName || '',
     source: 'WhatsApp',
     fecha_creacion: new Date(),
@@ -234,7 +327,6 @@ if (!docSnap.exists) {
   });
   await syncLeadNextSequence(jid, secuenciasActivas);
 } else if (sender === 'lead' || isLinkCommand) {
-  const leadData = docSnap.data() || {};
   let existingSequences = Array.isArray(leadData.secuenciasActivas)
     ? leadData.secuenciasActivas.filter(Boolean)
     : [];
@@ -256,8 +348,7 @@ if (!docSnap.exists) {
   }
 }
 
-const leadId = jid;
-
+    const leadId = jid;
 
     // 5) GUARDAR el mensaje dentro de /leads/{leadId}/messages
     const msgData = {
@@ -276,8 +367,21 @@ const leadId = jid;
     // 6) ACTUALIZAR el lead: incrementar unreadCount si envió el lead
     const updateData = {
       etiquetas: FieldValue.arrayUnion(trigger),
-      lastMessageAt: msgData.timestamp
+      lastMessageAt: msgData.timestamp,
+      jid: leadIdentity.jid,
+      addressingMode,
+      lastAddressingMode: addressingMode,
+      isLidRemote
     };
+    if (leadIdentity.telefono) {
+      updateData.telefono = leadIdentity.telefono;
+    }
+    if (leadIdentity.resolvedJid) {
+      updateData.resolvedJid = leadIdentity.resolvedJid;
+    }
+    if (leadIdentity.lidJid) {
+      updateData.lidJid = leadIdentity.lidJid;
+    }
     if (sender === 'lead') {
       updateData.unreadCount = FieldValue.increment(1);
     }
@@ -304,9 +408,8 @@ export async function sendFullAudioAsDocument(phone, fileUrl) {
   const sock = getWhatsAppSock();
   if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
-  let num = String(phone).replace(/\D/g, '');
-  if (num.length === 10) num = '52' + num;
-  const jid = `${num}@s.whatsapp.net`;
+  const jid = resolveTargetJid(phone);
+  if (!jid) throw new Error('No se pudo obtener JID para el envío de documento');
 
   // 1) Descargar el archivo
   let res;
@@ -341,10 +444,10 @@ export async function sendMessageToLead(phone, messageContent) {
     throw new Error('No hay conexión activa con WhatsApp');
   }
 
-  // 1) Normalizar número: quitar no dígitos y añadir prefijo MX si es 10 dígitos
-  let num = String(phone).replace(/\D/g, '');
-  if (num.length === 10) num = '52' + num;
-  const jid = `${num}@s.whatsapp.net`;
+  const jid = resolveTargetJid(phone);
+  if (!jid) {
+    throw new Error('No se pudo obtener JID del lead');
+  }
 
   // 2) Enviar mensaje de texto sin link preview y con timeout extendido
   await whatsappSock.sendMessage(
@@ -359,14 +462,9 @@ export async function sendMessageToLead(phone, messageContent) {
   );
 
   // 3) Guardar en Firestore bajo sender 'business'
-  const q = await db
-    .collection('leads')
-    .where('telefono', '==', num)
-    .limit(1)
-    .get();
+  const leadRef = await findLeadRef(jid);
 
-  if (!q.empty) {
-    const leadId = q.docs[0].id;
+  if (leadRef) {
     const outMsg = {
       content: messageContent,
       sender: 'business',
@@ -374,20 +472,13 @@ export async function sendMessageToLead(phone, messageContent) {
     };
 
     // 3a) Añadir al subcolección messages
-    await db
-      .collection('leads')
-      .doc(leadId)
-      .collection('messages')
-      .add(outMsg);
+    await leadRef.collection('messages').add(outMsg);
 
     // 3b) Actualizar lastMessageAt del lead
-    await db
-      .collection('leads')
-      .doc(leadId)
-      .update({ lastMessageAt: outMsg.timestamp });
+    await leadRef.update({ lastMessageAt: outMsg.timestamp });
   }
 
-  return { success: true };
+  return { success: true, jid };
 }
 
 export function getLatestQR() {
@@ -415,8 +506,8 @@ export async function sendAudioMessage(phone, filePath) {
   const sock = getWhatsAppSock();
   if (!sock) throw new Error('Socket de WhatsApp no está conectado');
 
-  const num = String(phone).replace(/\D/g, '');
-  const jid = `${num}@s.whatsapp.net`;
+  const jid = resolveTargetJid(phone);
+  if (!jid) throw new Error('No se pudo obtener JID para audio');
 
   // 1) Leer y enviar por Baileys como audio/mp4
   const audioBuffer = fs.readFileSync(filePath);
@@ -428,7 +519,7 @@ export async function sendAudioMessage(phone, filePath) {
 
   // 2) Subir a Firebase Storage
   const bucket = admin.storage().bucket();
-  const dest   = `audios/${num}-${Date.now()}.m4a`;
+  const dest   = `audios/${phoneFromJid(jid) || 'unknown'}-${Date.now()}.m4a`;
   const file   = bucket.file(dest);
   await file.save(audioBuffer, { contentType: 'audio/mp4' });
   const [mediaUrl] = await file.getSignedUrl({
@@ -437,12 +528,8 @@ export async function sendAudioMessage(phone, filePath) {
   });
 
   // 3) Guardar en Firestore
-  const q = await db.collection('leads')
-                    .where('telefono', '==', num)
-                    .limit(1)
-                    .get();
-  if (!q.empty) {
-    const leadId = q.docs[0].id;
+  const leadRef = await findLeadRef(jid);
+  if (leadRef) {
     const msgData = {
       content: '',
       mediaType: 'audio',
@@ -450,13 +537,8 @@ export async function sendAudioMessage(phone, filePath) {
       sender: 'business',
       timestamp: new Date()
     };
-    await db.collection('leads')
-            .doc(leadId)
-            .collection('messages')
-            .add(msgData);
-    await db.collection('leads')
-            .doc(leadId)
-            .update({ lastMessageAt: msgData.timestamp });
+    await leadRef.collection('messages').add(msgData);
+    await leadRef.update({ lastMessageAt: msgData.timestamp });
   }
 }
 
@@ -470,10 +552,9 @@ export async function sendClipMessage(phone, clipUrl) {
   const sock = getWhatsAppSock();
   if (!sock) throw new Error('No hay conexión activa con WhatsApp');
 
-  // 1) Normalizar teléfono → JID
-  let num = String(phone).replace(/\D/g, '');
-  if (num.length === 10) num = '52' + num;
-  const jid = `${num}@s.whatsapp.net`;
+  // 1) Normalizar teléfono/JID → JID
+  const jid = resolveTargetJid(phone);
+  if (!jid) throw new Error('No se pudo obtener JID para el clip');
 
   // 2) Payload de audio directo desde URL
   const messagePayload = {

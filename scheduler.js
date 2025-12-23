@@ -10,7 +10,7 @@ import os from 'os';
 import path from 'path';
 import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
-import { sendMessageToLead, sendClipMessage } from './whatsappService.js';
+import { sendMessageToLead, sendClipMessage, extractJidFromLead } from './whatsappService.js';
 import { calculateLeadNextRun, syncLeadNextSequence } from './sequenceUtils.js';
 
 // 🔧 CRÍTICO: Definir constantes faltantes
@@ -102,8 +102,14 @@ async function enviarMensaje(lead, mensaje) {
     const sock = getWhatsAppSock();
     if (!sock) return;
 
-    const phone = (lead.telefono || '').replace(/\D/g, '');
-    const jid = `${phone}@s.whatsapp.net`;
+    const jid = extractJidFromLead(lead);
+    if (!jid) {
+      console.warn('❌ No se pudo resolver JID para lead', lead.id || lead.jid || lead.leadId);
+      return;
+    }
+    const phone =
+      (lead.telefono || '').replace(/\D/g, '') ||
+      (lead.resolvedJid || lead.jid || lead.id || '').replace(/\D/g, '');
 
     switch (mensaje.type) {
       case 'texto': {
