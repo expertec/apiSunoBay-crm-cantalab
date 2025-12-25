@@ -242,7 +242,7 @@ async function processSequences() {
 
     console.log(`📊 Procesando ${activeLeads.length} leads`);
     
-    const batch = db.batch();
+    let batch = db.batch();
     let batchCount = 0;
     const MAX_BATCH_SIZE = 10;
 
@@ -297,7 +297,14 @@ async function processSequences() {
         updatedSequences.push(seq);
       }
 
-      if (needsUpdate && batchCount < MAX_BATCH_SIZE) {
+      if (needsUpdate) {
+        if (batchCount >= MAX_BATCH_SIZE) {
+          await batch.commit();
+          console.log(`✅ Batch parcial actualizado: ${batchCount} leads`);
+          batch = db.batch();
+          batchCount = 0;
+        }
+
         const leadRef = db.collection('leads').doc(lead.id);
         const hasSequences = updatedSequences.length > 0;
         const updateData = {
@@ -324,7 +331,7 @@ async function processSequences() {
 
     if (batchCount > 0) {
       await batch.commit();
-      console.log(`✅ Batch actualizado: ${batchCount} leads`);
+      console.log(`✅ Batch final actualizado: ${batchCount} leads`);
     }
 
   } catch (err) {
