@@ -35,6 +35,47 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
 let configCache = null;
 let configCacheTime = 0;
 
+// Normaliza duplicados de la misma secuencia, conservando la de mayor avance
+function dedupeSequencesByTrigger(seqs = []) {
+  const map = new Map();
+  const pickEarliest = (a, b) => {
+    const times = [a, b]
+      .map(d => {
+        const t = new Date(d).getTime();
+        return Number.isNaN(t) ? null : t;
+      })
+      .filter(Boolean);
+    if (!times.length) return a || b || null;
+    const earliest = Math.min(...times);
+    return new Date(earliest).toISOString();
+  };
+
+  for (const seq of Array.isArray(seqs) ? seq.filter(Boolean) : []) {
+    if (!seq.trigger) continue;
+    const current = map.get(seq.trigger);
+    if (!current) {
+      map.set(seq.trigger, seq);
+      continue;
+    }
+
+    const currentIndex = Number(current.index) || 0;
+    const candidateIndex = Number(seq.index) || 0;
+    const earliestStart = pickEarliest(current.startTime, seq.startTime);
+
+    if (candidateIndex > currentIndex) {
+      map.set(seq.trigger, { ...seq, startTime: earliestStart });
+    } else if (candidateIndex === currentIndex) {
+      // Igual avance: conservar el que tenga start más antiguo
+      map.set(seq.trigger, { ...current, startTime: earliestStart });
+    } else {
+      // Mantener el de mayor índice, pero si el nuevo tiene start más antiguo, usarlo
+      map.set(seq.trigger, { ...current, startTime: earliestStart });
+    }
+  }
+
+  return Array.from(map.values());
+}
+
 /**
  * 🔧 FUNCIÓN FALTANTE: replacePlaceholders
  */
@@ -253,10 +294,17 @@ async function processSequences() {
         continue;
       }
 
-      let needsUpdate = false;
+      // Evita reprocesar el mismo lead en ventanas muy cortas (ej. múltiples workers)
+      const lastProcessedMillis = lead.lastProcessedAt?.toDate?.()?.getTime?.() || 0;
+      if (lastProcessedMillis && (Date.now() - lastProcessedMillis) < 55_000) {
+        continue;
+      }
+
+      const dedupedSequences = dedupeSequencesByTrigger(lead.secuenciasActivas);
+      let needsUpdate = dedupedSequences.length !== lead.secuenciasActivas.length;
       const updatedSequences = [];
 
-      for (const seq of lead.secuenciasActivas) {
+      for (const seq of dedupedSequences) {
         const { trigger, startTime, index } = seq;
         
         const sequenceData = await getSequenceFromCache(trigger);
