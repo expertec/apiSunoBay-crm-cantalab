@@ -50,7 +50,7 @@ function dedupeSequencesByTrigger(seqs = []) {
     return new Date(earliest).toISOString();
   };
 
-  for (const seq of Array.isArray(seqs) ? seq.filter(Boolean) : []) {
+  for (const seq of Array.isArray(seqs) ? seqs.filter(Boolean) : []) {
     if (!seq.trigger) continue;
     const current = map.get(seq.trigger);
     if (!current) {
@@ -239,7 +239,7 @@ async function getConfigFromCache() {
 async function processSequences() {
   try {
     console.log('🔍 Iniciando processSequences optimizado...');
-    const LOCK_WINDOW_MS = 90 * 1000; // ventana de lock por lead para evitar doble envío
+    const LOCK_WINDOW_MS = 3 * 60 * 1000; // ventana de lock por lead para evitar doble envío (3 min)
     
     const primarySnap = await db
       .collection('leads')
@@ -311,6 +311,7 @@ async function processSequences() {
           const data = snap.data() || {};
           const lockUntil = data.sequenceLockUntil?.toDate?.()?.getTime?.() || 0;
           if (lockUntil && lockUntil > now) {
+            console.log(`⏳ Lock vigente para lead ${lead.id} hasta ${new Date(lockUntil).toISOString()}`);
             return; // lock vigente, saltar
           }
           tx.update(leadRef, {
@@ -369,7 +370,7 @@ async function processSequences() {
       }
 
       if (!needsUpdate) {
-        // Limpia lock si no hubo cambios
+        // Limpia lock si no hubo cambios y marca timestamp
         try {
           await db.collection('leads').doc(lead.id).update({
             sequenceLockUntil: FieldValue.delete(),
@@ -381,37 +382,35 @@ async function processSequences() {
         continue;
       }
 
-      if (needsUpdate) {
-        if (batchCount >= MAX_BATCH_SIZE) {
-          await batch.commit();
-          console.log(`✅ Batch parcial actualizado: ${batchCount} leads`);
-          batch = db.batch();
-          batchCount = 0;
-        }
+      if (batchCount >= MAX_BATCH_SIZE) {
+        await batch.commit();
+        console.log(`✅ Batch parcial actualizado: ${batchCount} leads`);
+        batch = db.batch();
+        batchCount = 0;
+      }
 
-        const leadRef = db.collection('leads').doc(lead.id);
-        const hasSequences = updatedSequences.length > 0;
-        const updateData = {
-          secuenciasActivas: updatedSequences,
-          lastProcessedAt: FieldValue.serverTimestamp(),
-          hasActiveSequences: hasSequences,
-          sequenceLockUntil: FieldValue.delete()
-        };
+      const leadRef = db.collection('leads').doc(lead.id);
+      const hasSequences = updatedSequences.length > 0;
+      const updateData = {
+        secuenciasActivas: updatedSequences,
+        lastProcessedAt: FieldValue.serverTimestamp(),
+        hasActiveSequences: hasSequences,
+        sequenceLockUntil: FieldValue.delete()
+      };
 
-        if (hasSequences) {
-          const nextRun = await calculateLeadNextRun(updatedSequences);
-          if (nextRun) {
-            updateData.nextSequenceAt = nextRun;
-          } else {
-            updateData.nextSequenceAt = FieldValue.delete();
-          }
+      if (hasSequences) {
+        const nextRun = await calculateLeadNextRun(updatedSequences);
+        if (nextRun) {
+          updateData.nextSequenceAt = nextRun;
         } else {
           updateData.nextSequenceAt = FieldValue.delete();
         }
-
-        batch.update(leadRef, updateData);
-        batchCount++;
+      } else {
+        updateData.nextSequenceAt = FieldValue.delete();
       }
+
+      batch.update(leadRef, updateData);
+      batchCount++;
     }
 
     if (batchCount > 0) {
