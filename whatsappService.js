@@ -336,7 +336,11 @@ if (!docSnap.exists) {
   const alreadyActive = existingSequences.some(
     seq => seq?.trigger === trigger && !seq?.completed
   );
-  if (!alreadyActive || isLinkCommand) {
+  const hadTriggerBefore =
+    Array.isArray(leadData.etiquetas) && leadData.etiquetas.includes(trigger);
+  // Solo volver a activar automáticamente si nunca tuvo esta secuencia,
+  // o si viene explícitamente con el comando de link.
+  if ((!alreadyActive && !hadTriggerBefore) || isLinkCommand) {
     sequencesToPersist = [
       ...existingSequences,
       {
