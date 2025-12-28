@@ -239,6 +239,7 @@ async function getConfigFromCache() {
 async function processSequences() {
   try {
     console.log('🔍 Iniciando processSequences optimizado...');
+    const LOCK_WINDOW_MS = 90 * 1000; // ventana de lock por lead para evitar doble envío
     
     const primarySnap = await db
       .collection('leads')
@@ -300,6 +301,28 @@ async function processSequences() {
         continue;
       }
 
+      // Intentar adquirir lock por lead para evitar doble procesamiento simultáneo
+      const leadRef = db.collection('leads').doc(lead.id);
+      const now = Date.now();
+      let lockAcquired = false;
+      try {
+        await db.runTransaction(async (tx) => {
+          const snap = await tx.get(leadRef);
+          const data = snap.data() || {};
+          const lockUntil = data.sequenceLockUntil?.toDate?.()?.getTime?.() || 0;
+          if (lockUntil && lockUntil > now) {
+            return; // lock vigente, saltar
+          }
+          tx.update(leadRef, {
+            sequenceLockUntil: new Date(now + LOCK_WINDOW_MS)
+          });
+          lockAcquired = true;
+        });
+      } catch (lockErr) {
+        console.warn(`⚠️ No se pudo obtener lock para lead ${lead.id}:`, lockErr.message);
+      }
+      if (!lockAcquired) continue;
+
       const dedupedSequences = dedupeSequencesByTrigger(lead.secuenciasActivas);
       let needsUpdate = dedupedSequences.length !== lead.secuenciasActivas.length;
       const updatedSequences = [];
@@ -345,6 +368,19 @@ async function processSequences() {
         updatedSequences.push(seq);
       }
 
+      if (!needsUpdate) {
+        // Limpia lock si no hubo cambios
+        try {
+          await db.collection('leads').doc(lead.id).update({
+            sequenceLockUntil: FieldValue.delete(),
+            lastProcessedAt: FieldValue.serverTimestamp()
+          });
+        } catch (unlockErr) {
+          console.warn(`⚠️ No se pudo liberar lock para lead ${lead.id}:`, unlockErr.message);
+        }
+        continue;
+      }
+
       if (needsUpdate) {
         if (batchCount >= MAX_BATCH_SIZE) {
           await batch.commit();
@@ -358,7 +394,8 @@ async function processSequences() {
         const updateData = {
           secuenciasActivas: updatedSequences,
           lastProcessedAt: FieldValue.serverTimestamp(),
-          hasActiveSequences: hasSequences
+          hasActiveSequences: hasSequences,
+          sequenceLockUntil: FieldValue.delete()
         };
 
         if (hasSequences) {
