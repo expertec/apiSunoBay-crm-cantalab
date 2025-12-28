@@ -389,7 +389,6 @@ async function processSequences() {
         batchCount = 0;
       }
 
-      const leadRef = db.collection('leads').doc(lead.id);
       const hasSequences = updatedSequences.length > 0;
       const updateData = {
         secuenciasActivas: updatedSequences,
